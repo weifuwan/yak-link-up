@@ -310,6 +310,23 @@ public final class MySqlCreateTableSqlBuilder {
             return text;
         }
 
+        /*
+         * MySQL 8.0.13+ 要求表达式和函数调用
+         * 形式的默认值必须用括号包裹：
+         *   - curdate()              → (curdate())
+         *   - now()                  → (now())
+         *   - (curdate() + interval 1 day) → 已有括号，原样输出
+         *
+         * INFORMATION_SCHEMA 中函数调用不带外层
+         * 括号，必须手动补上，否则 MySQL 报语法错误。
+         */
+        if (isSqlFunctionOrDefaultExpression(text)) {
+            if (text.charAt(0) == '(') {
+                return text;
+            }
+            return "(" + text + ")";
+        }
+
         SqlType sqlType =
                 column.getDataType()
                         .getSqlType();
@@ -325,5 +342,39 @@ public final class MySqlCreateTableSqlBuilder {
         return "'"
                 + escapeString(text)
                 + "'";
+    }
+
+    /**
+     * 判断默认值字符串是否为 SQL 函数调用
+     * 或表达式，而非普通字面量。
+     *
+     * <p>覆盖场景：
+     * <ul>
+     *   <li>{@code curdate()} — 函数调用</li>
+     *   <li>{@code now()} — 函数调用</li>
+     *   <li>{@code (curdate() + interval 1 day)} — 表达式</li>
+     *   <li>{@code (uuid())} — 括号包裹的函数调用</li>
+     * </ul>
+     */
+    private static boolean isSqlFunctionOrDefaultExpression(
+            String value) {
+
+        if (value.isEmpty()) {
+            return false;
+        }
+
+        /*
+         * MySQL 8.0+ 表达式默认值以 '(' 开头，
+         * 例如 (curdate() + interval 1 day)。
+         */
+        if (value.charAt(0) == '(') {
+            return true;
+        }
+
+        /*
+         * 包含 '(' 的默认值视为函数调用，
+         * 例如 curdate()、now()、uuid()。
+         */
+        return value.contains("(");
     }
 }

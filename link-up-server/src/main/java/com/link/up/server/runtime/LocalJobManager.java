@@ -12,14 +12,9 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.FutureTask;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,7 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LocalJobManager
         implements JobManager {
 
-    private final ThreadPoolExecutor executor;
+    private final int maxQueuedJobs;
+    private final Semaphore admissionSemaphore;
+    private final java.util.concurrent.ConcurrentMap<String, Thread>
+            jobThreads =
+            new java.util.concurrent.ConcurrentHashMap<
+                    String, Thread>();
+    private final AtomicInteger threadSequence =
+            new AtomicInteger();
     private final JobExecutor jobExecutor;
     private final JobRepository repository;
     private final JobIdGenerator jobIdGenerator;
@@ -76,6 +78,7 @@ public final class LocalJobManager
                     "maxQueuedJobs must be greater than 0");
         }
 
+        this.maxQueuedJobs = maxQueuedJobs;
         this.jobExecutor = jobExecutor;
         this.repository = repository;
         this.jobIdGenerator = jobIdGenerator;
@@ -84,16 +87,8 @@ public final class LocalJobManager
                         0L,
                         shutdownTimeoutMillis);
 
-        this.executor =
-                new ThreadPoolExecutor(
-                        jobThreads,
-                        jobThreads,
-                        0L,
-                        TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<Runnable>(
-                                maxQueuedJobs),
-                        new JobThreadFactory(),
-                        new ThreadPoolExecutor.AbortPolicy());
+        this.admissionSemaphore =
+                new Semaphore(maxQueuedJobs);
     }
 
     public JobSnapshot submit(
@@ -148,30 +143,40 @@ public final class LocalJobManager
 
         handle.markSubmitted();
 
-        FutureTask<Void> task =
-                new FutureTask<Void>(
-                        new Callable<Void>() {
-                            public Void call() {
-                                executeJob(handle);
-                                return null;
-                            }
-                        });
-
-        handle.bindFuture(task);
-        handle.markQueued();
-
-        try {
-            executor.execute(task);
-        } catch (RejectedExecutionException exception) {
-            task.cancel(true);
+        if (!admissionSemaphore.tryAcquire()) {
             runningJobs.remove(
                     jobId,
                     handle);
             unregisterSubmission(
                     jobId,
                     submission);
-            throw exception;
+            throw new RejectedExecutionException(
+                    "Job queue is full (maxQueuedJobs="
+                            + maxQueuedJobs + ")");
         }
+
+        handle.markQueued();
+
+        Thread jobThread =
+                new Thread(
+                        new Runnable() {
+                            public void run() {
+                                try {
+                                    executeJob(handle);
+                                } finally {
+                                    jobThreads.remove(jobId);
+                                    admissionSemaphore.release();
+                                }
+                            }
+                        },
+                        "link-up-job-"
+                                + jobId
+                                + "-"
+                                + threadSequence.incrementAndGet());
+        jobThread.setDaemon(false);
+
+        jobThreads.put(jobId, jobThread);
+        jobThread.start();
 
         return JobSnapshotFactory.create(handle);
     }
@@ -548,7 +553,12 @@ public final class LocalJobManager
                 == JobExecutionHandle.CancelResult
                 .CANCELLED_BEFORE_START) {
 
-            executor.purge();
+            Thread jobThread =
+                    jobThreads.remove(jobId);
+            if (jobThread != null) {
+                jobThread.interrupt();
+            }
+            admissionSemaphore.release();
 
             completeAndArchive(
                     handle,
@@ -619,7 +629,13 @@ public final class LocalJobManager
                         == JobExecutionHandle.CancelResult
                         .CANCELLED_BEFORE_START) {
 
-                    executor.purge();
+                    Thread jobThread =
+                            jobThreads.remove(
+                                    handle.getJobId());
+                    if (jobThread != null) {
+                        jobThread.interrupt();
+                    }
+                    admissionSemaphore.release();
 
                     completeAndArchive(
                             handle,
@@ -632,15 +648,31 @@ public final class LocalJobManager
             }
         }
 
-        executor.shutdownNow();
+        /*
+         * 中断所有仍在运行的 Job 线程，
+         * 等待其在超时时间内响应中断。
+         */
+        for (Thread thread : jobThreads.values()) {
+            thread.interrupt();
+        }
 
-        try {
-            executor.awaitTermination(
-                    shutdownTimeoutMillis,
-                    TimeUnit.MILLISECONDS);
-        } catch (InterruptedException exception) {
-            Thread.currentThread()
-                    .interrupt();
+        long deadline =
+                System.currentTimeMillis()
+                        + shutdownTimeoutMillis;
+
+        for (Thread thread : jobThreads.values()) {
+            long remaining =
+                    deadline - System.currentTimeMillis();
+            if (remaining <= 0) {
+                break;
+            }
+            try {
+                thread.join(remaining);
+            } catch (InterruptedException exception) {
+                Thread.currentThread()
+                        .interrupt();
+                break;
+            }
         }
 
         /*
@@ -682,22 +714,5 @@ public final class LocalJobManager
         }
     }
 
-    private static final class JobThreadFactory
-            implements ThreadFactory {
 
-        private final AtomicInteger sequence =
-                new AtomicInteger();
-
-        public Thread newThread(Runnable runnable) {
-            Thread thread =
-                    new Thread(
-                            runnable,
-                            "link-up-job-"
-                                    + sequence
-                                    .incrementAndGet());
-
-            thread.setDaemon(false);
-            return thread;
-        }
-    }
 }
