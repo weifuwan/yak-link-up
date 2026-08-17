@@ -16,6 +16,7 @@
 
     <modules>
         <module>link-up-connector-jdbc</module>
+        <module>link-up-connector-doris</module>
         <module>link-up-connector-http</module>
     </modules>
 
