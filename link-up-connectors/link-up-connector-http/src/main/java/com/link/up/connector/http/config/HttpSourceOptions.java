@@ -17,7 +17,7 @@ public final class HttpSourceOptions {
     private HttpSourceOptions() {
     }
 
-    // ── 基础请求配置 ──────────────────────────────────────────────
+    // ── 基础请求配置 ──────────────────────────────────────
 
     public static final Option<String> URL =
             Options.key("url")
@@ -59,7 +59,7 @@ public final class HttpSourceOptions {
                     .withSemanticType("HTTP_BODY")
                     .withScope(ConnectorOptionScope.TASK);
 
-    // ── 数据格式与 Schema ──────────────────────────────────────────
+    // ── 数据格式与 Schema ──────────────────────────────────
 
     public static final Option<HttpFormat> FORMAT =
             Options.key("format")
@@ -82,7 +82,7 @@ public final class HttpSourceOptions {
                     .withSemanticType("SCHEMA_FIELDS")
                     .withScope(ConnectorOptionScope.TASK);
 
-    // ── JSON 提取 ──────────────────────────────────────────────────
+    // ── JSON 提取 ──────────────────────────────────────────
 
     /**
      * 从响应 JSON 中提取数据数组的 JsonPath。
@@ -111,63 +111,70 @@ public final class HttpSourceOptions {
                     .withSemanticType("JSON_FIELD_MAPPING")
                     .withScope(ConnectorOptionScope.TASK);
 
-    // ── 分页配置 ──────────────────────────────────────────────────
+    // ── 分页配置 ──────────────────────────────────────────
 
     public static final Option<String> PAGE_FIELD =
-            Options.key("pageing.page_field")
+            Options.key("paging.page_field")
                     .stringType()
                     .defaultValue("page")
                     .withDescription("分页字段名")
                     .withSemanticType("PAGE_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.page_field");
 
     public static final Option<Long> TOTAL_PAGE_SIZE =
-            Options.key("pageing.total_page_size")
+            Options.key("paging.total_page_size")
                     .longType()
                     .defaultValue(0L)
                     .withDescription("总页数，0 表示根据返回行数判断是否继续")
                     .withSemanticType("TOTAL_PAGES")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.total_page_size");
 
     public static final Option<Integer> PAGE_BATCH_SIZE =
-            Options.key("pageing.batch_size")
+            Options.key("paging.batch_size")
                     .intType()
                     .defaultValue(100)
                     .withDescription("每页返回行数，用于判断是否继续翻页")
                     .withSemanticType("PAGE_BATCH_SIZE")
-                    .withScope(ConnectorOptionScope.RUNTIME);
+                    .withScope(ConnectorOptionScope.RUNTIME)
+                    .withFallbackKeys("pageing.batch_size");
 
     public static final Option<Integer> START_PAGE_NUMBER =
-            Options.key("pageing.start_page_number")
+            Options.key("paging.start_page_number")
                     .intType()
                     .defaultValue(1)
                     .withDescription("起始页码")
                     .withSemanticType("START_PAGE")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.start_page_number");
 
     public static final Option<PageType> PAGE_TYPE =
-            Options.key("pageing.page_type")
+            Options.key("paging.page_type")
                     .enumType(PageType.class)
                     .defaultValue(PageType.PAGE_NUMBER)
                     .withDescription("分页类型：PAGE_NUMBER 或 CURSOR")
                     .withSemanticType("PAGE_TYPE")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.page_type");
 
     public static final Option<String> CURSOR_FIELD =
-            Options.key("pageing.cursor_field")
+            Options.key("paging.cursor_field")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("Cursor 分页时请求参数中的游标字段名")
                     .withSemanticType("CURSOR_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.cursor_field");
 
     public static final Option<String> CURSOR_RESPONSE_FIELD =
-            Options.key("pageing.cursor_response_field")
+            Options.key("paging.cursor_response_field")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("Cursor 分页时从响应中提取游标值的 JsonPath")
                     .withSemanticType("CURSOR_RESPONSE_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.cursor_response_field");
 
     /**
      * 是否使用占位符替换（${page}、${cursor}）。
@@ -176,14 +183,15 @@ public final class HttpSourceOptions {
      * 会被替换为实际值；为 false 时，仅按 key 进行替换。
      */
     public static final Option<Boolean> USE_PLACEHOLDER_REPLACEMENT =
-            Options.key("pageing.use_placeholder_replacement")
+            Options.key("paging.use_placeholder_replacement")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("是否使用占位符替换分页参数")
                     .withSemanticType("PLACEHOLDER_REPLACEMENT")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.use_placeholder_replacement");
 
-    // ── 重试与超时 ──────────────────────────────────────────────────
+    // ── 重试与超时 ──────────────────────────────────────────
 
     public static final Option<Integer> RETRY =
             Options.key("retry")
@@ -209,6 +217,34 @@ public final class HttpSourceOptions {
                     .withSemanticType("RETRY_BACKOFF_MAX")
                     .withScope(ConnectorOptionScope.RUNTIME);
 
+    /**
+     * 触发重试的 HTTP 状态码列表。
+     *
+     * <p>默认包含 429（Too Many Requests）、500、502、503、504，
+     * 这些状态码通常表示瞬时故障，重试有较大概率成功。
+     */
+    public static final Option<String> RETRYABLE_STATUS_CODES =
+            Options.key("retryable_status_codes")
+                    .stringType()
+                    .defaultValue("429,500,502,503,504")
+                    .withDescription("触发重试的 HTTP 状态码列表，逗号分隔")
+                    .withSemanticType("RETRYABLE_STATUS_CODES")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    /**
+     * 重试抖动因子上限（毫秒）。
+     *
+     * <p>在指数退避等待时间上叠加随机抖动，避免多个并发请求同时重试
+     * 造成惊群效应。设为 0 则禁用抖动。
+     */
+    public static final Option<Integer> RETRY_JITTER_MS =
+            Options.key("retry_jitter_ms")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription("重试抖动因子上限（毫秒），0 表示禁用抖动")
+                    .withSemanticType("RETRY_JITTER")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
     public static final Option<Integer> CONNECT_TIMEOUT_MS =
             Options.key("connect_timeout_ms")
                     .intType()
@@ -225,7 +261,36 @@ public final class HttpSourceOptions {
                     .withSemanticType("TIMEOUT_MILLIS")
                     .withScope(ConnectorOptionScope.TASK);
 
-    // ── 其他 ──────────────────────────────────────────────────────
+    // ── 连接池 ──────────────────────────────────────────
+
+    /**
+     * 连接池最大空闲连接数。
+     *
+     * <p>OkHttp 默认值为 5。对于高并发分页抓取场景，适当增大
+     * 可以减少连接建立开销。
+     */
+    public static final Option<Integer> POOL_MAX_IDLE_CONNECTIONS =
+            Options.key("pool.max_idle_connections")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription("连接池最大空闲连接数")
+                    .withSemanticType("POOL_SIZE")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    /**
+     * 连接池空闲连接保活时长（毫秒）。
+     *
+     * <p>超过该时长的空闲连接将被回收。默认 5 分钟。
+     */
+    public static final Option<Long> POOL_KEEP_ALIVE_DURATION_MS =
+            Options.key("pool.keep_alive_duration_ms")
+                    .longType()
+                    .defaultValue(300000L)
+                    .withDescription("连接池空闲连接保活时长（毫秒），默认 300000（5 分钟）")
+                    .withSemanticType("POOL_KEEP_ALIVE")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    // ── 其他 ──────────────────────────────────────────
 
     /**
      * 当 format=text 时，是否将多行文本拆分为多行数据。

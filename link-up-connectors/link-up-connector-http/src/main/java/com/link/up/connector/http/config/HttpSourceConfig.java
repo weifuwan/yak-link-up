@@ -6,6 +6,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * HTTP Source 解析后的不可变配置。
@@ -36,8 +38,14 @@ public final class HttpSourceConfig {
     private final int retry;
     private final int retryBackoffMultiplierMs;
     private final int retryBackoffMaxMs;
+    private final Set<Integer> retryableStatusCodes;
+    private final int retryJitterMs;
     private final int connectTimeoutMs;
     private final int socketTimeoutMs;
+
+    // 连接池
+    private final int poolMaxIdleConnections;
+    private final long poolKeepAliveDurationMs;
 
     // 其他
     private final boolean enableMultiLines;
@@ -64,8 +72,12 @@ public final class HttpSourceConfig {
         this.retry = builder.retry;
         this.retryBackoffMultiplierMs = builder.retryBackoffMultiplierMs;
         this.retryBackoffMaxMs = builder.retryBackoffMaxMs;
+        this.retryableStatusCodes = builder.retryableStatusCodes;
+        this.retryJitterMs = builder.retryJitterMs;
         this.connectTimeoutMs = builder.connectTimeoutMs;
         this.socketTimeoutMs = builder.socketTimeoutMs;
+        this.poolMaxIdleConnections = builder.poolMaxIdleConnections;
+        this.poolKeepAliveDurationMs = builder.poolKeepAliveDurationMs;
         this.enableMultiLines = builder.enableMultiLines;
         this.jsonFieldMissedReturnNull = builder.jsonFieldMissedReturnNull;
 
@@ -121,8 +133,12 @@ public final class HttpSourceConfig {
                 .retry(options.get(HttpSourceOptions.RETRY))
                 .retryBackoffMultiplierMs(options.get(HttpSourceOptions.RETRY_BACKOFF_MULTIPLIER_MS))
                 .retryBackoffMaxMs(options.get(HttpSourceOptions.RETRY_BACKOFF_MAX_MS))
+                .retryableStatusCodes(parseRetryableStatusCodes(options.get(HttpSourceOptions.RETRYABLE_STATUS_CODES)))
+                .retryJitterMs(options.get(HttpSourceOptions.RETRY_JITTER_MS))
                 .connectTimeoutMs(options.get(HttpSourceOptions.CONNECT_TIMEOUT_MS))
                 .socketTimeoutMs(options.get(HttpSourceOptions.SOCKET_TIMEOUT_MS))
+                .poolMaxIdleConnections(options.get(HttpSourceOptions.POOL_MAX_IDLE_CONNECTIONS))
+                .poolKeepAliveDurationMs(options.get(HttpSourceOptions.POOL_KEEP_ALIVE_DURATION_MS))
                 .enableMultiLines(options.get(HttpSourceOptions.ENABLE_MULTI_LINES))
                 .jsonFieldMissedReturnNull(options.get(HttpSourceOptions.JSON_FIELD_MISSED_RETURN_NULL))
                 .build();
@@ -133,6 +149,20 @@ public final class HttpSourceConfig {
             return Collections.emptyMap();
         }
         return Collections.unmodifiableMap(new LinkedHashMap<>(source));
+    }
+
+    private static Set<Integer> parseRetryableStatusCodes(String csv) {
+        if (csv == null || csv.trim().isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<Integer> codes = new TreeSet<>();
+        for (String token : csv.split(",")) {
+            String trimmed = token.trim();
+            if (!trimmed.isEmpty()) {
+                codes.add(Integer.parseInt(trimmed));
+            }
+        }
+        return Collections.unmodifiableSet(codes);
     }
 
     public boolean hasPagination() {
@@ -161,8 +191,12 @@ public final class HttpSourceConfig {
     public int getRetry() { return retry; }
     public int getRetryBackoffMultiplierMs() { return retryBackoffMultiplierMs; }
     public int getRetryBackoffMaxMs() { return retryBackoffMaxMs; }
+    public Set<Integer> getRetryableStatusCodes() { return retryableStatusCodes; }
+    public int getRetryJitterMs() { return retryJitterMs; }
     public int getConnectTimeoutMs() { return connectTimeoutMs; }
     public int getSocketTimeoutMs() { return socketTimeoutMs; }
+    public int getPoolMaxIdleConnections() { return poolMaxIdleConnections; }
+    public long getPoolKeepAliveDurationMs() { return poolKeepAliveDurationMs; }
     public boolean isEnableMultiLines() { return enableMultiLines; }
     public boolean isJsonFieldMissedReturnNull() { return jsonFieldMissedReturnNull; }
 
@@ -187,8 +221,12 @@ public final class HttpSourceConfig {
         private int retry = 3;
         private int retryBackoffMultiplierMs = 100;
         private int retryBackoffMaxMs = 10000;
+        private Set<Integer> retryableStatusCodes = new TreeSet<>();
+        private int retryJitterMs = 100;
         private int connectTimeoutMs = 12000;
         private int socketTimeoutMs = 60000;
+        private int poolMaxIdleConnections = 8;
+        private long poolKeepAliveDurationMs = 300000L;
         private boolean enableMultiLines = false;
         private boolean jsonFieldMissedReturnNull = false;
 
@@ -212,8 +250,12 @@ public final class HttpSourceConfig {
         public Builder retry(int retry) { this.retry = retry; return this; }
         public Builder retryBackoffMultiplierMs(int v) { this.retryBackoffMultiplierMs = v; return this; }
         public Builder retryBackoffMaxMs(int v) { this.retryBackoffMaxMs = v; return this; }
+        public Builder retryableStatusCodes(Set<Integer> v) { this.retryableStatusCodes = v; return this; }
+        public Builder retryJitterMs(int v) { this.retryJitterMs = v; return this; }
         public Builder connectTimeoutMs(int v) { this.connectTimeoutMs = v; return this; }
         public Builder socketTimeoutMs(int v) { this.socketTimeoutMs = v; return this; }
+        public Builder poolMaxIdleConnections(int v) { this.poolMaxIdleConnections = v; return this; }
+        public Builder poolKeepAliveDurationMs(long v) { this.poolKeepAliveDurationMs = v; return this; }
         public Builder enableMultiLines(boolean v) { this.enableMultiLines = v; return this; }
         public Builder jsonFieldMissedReturnNull(boolean v) { this.jsonFieldMissedReturnNull = v; return this; }
 

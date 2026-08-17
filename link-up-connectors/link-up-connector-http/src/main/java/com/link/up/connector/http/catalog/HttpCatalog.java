@@ -401,17 +401,14 @@ public final class HttpCatalog implements Catalog {
                             .build());
         }
 
-        List<Column> columns =
-                builder.build().getColumns();
+        TableSchema schema = builder.build();
 
-        if (columns.isEmpty()) {
+        if (schema.getColumns().isEmpty()) {
             throw new CatalogException(
                     "JSON 对象无字段，无法推断 Schema");
         }
 
-        return TableSchema.builder()
-                .columns(columns)
-                .build();
+        return schema;
     }
 
     /**

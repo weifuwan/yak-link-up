@@ -123,6 +123,11 @@ public final class HttpSourceReader
 
         if (config.hasPagination()) {
             applyPagination(effectiveHeaders, effectiveParams);
+
+            // 占位符模式下，同步替换 body 中的分页占位符
+            if (config.isUsePlaceholderReplacement() && effectiveBody != null) {
+                effectiveBody = replaceBodyPlaceholder(effectiveBody);
+            }
         }
 
         LOG.debug("HTTP request page={}, cursor={}", currentPage, currentCursor);
@@ -244,6 +249,30 @@ public final class HttpSourceReader
             LOG.warn("提取游标值失败，分页结束: {}", e.getMessage());
             paginationExhausted = true;
         }
+    }
+
+    /**
+     * 替换 body 中的分页占位符（${page} 或 ${cursor}）。
+     */
+    private String replaceBodyPlaceholder(String body) {
+        String result = body;
+
+        if (config.getPageType() == PageType.CURSOR) {
+            if (currentCursor != null && config.getCursorField() != null) {
+                String placeholder = "${" + config.getCursorField() + "}";
+                if (result.contains(placeholder)) {
+                    result = result.replace(placeholder, currentCursor);
+                }
+            }
+        } else {
+            String pageField = config.getPageField();
+            String placeholder = "${" + pageField + "}";
+            if (result.contains(placeholder)) {
+                result = result.replace(placeholder, String.valueOf(currentPage));
+            }
+        }
+
+        return result;
     }
 
     // ── 占位符替换 ──────────────────────────────────────────

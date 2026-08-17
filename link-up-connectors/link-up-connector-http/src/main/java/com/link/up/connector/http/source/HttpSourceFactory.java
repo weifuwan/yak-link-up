@@ -110,8 +110,12 @@ public final class HttpSourceFactory
                         HttpSourceOptions.RETRY,
                         HttpSourceOptions.RETRY_BACKOFF_MULTIPLIER_MS,
                         HttpSourceOptions.RETRY_BACKOFF_MAX_MS,
+                        HttpSourceOptions.RETRYABLE_STATUS_CODES,
+                        HttpSourceOptions.RETRY_JITTER_MS,
                         HttpSourceOptions.CONNECT_TIMEOUT_MS,
                         HttpSourceOptions.SOCKET_TIMEOUT_MS,
+                        HttpSourceOptions.POOL_MAX_IDLE_CONNECTIONS,
+                        HttpSourceOptions.POOL_KEEP_ALIVE_DURATION_MS,
                         HttpSourceOptions.ENABLE_MULTI_LINES,
                         HttpSourceOptions.JSON_FIELD_MISSED_RETURN_NULL)
                 .build();
