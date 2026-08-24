@@ -1,5 +1,6 @@
 package com.link.up.connector.doris.sink;
 
+import com.link.up.api.dirtydata.BoundedMemoryDirtyDataCollector;
 import com.link.up.api.dirtydata.DirtyDataCollector;
 import com.link.up.api.dirtydata.DirtyDataContext;
 import com.link.up.api.dirtydata.DirtyDataSummary;
@@ -19,73 +20,84 @@ import com.link.up.connector.doris.converter.DorisRowSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Doris SinkWriter。
+ * Writes FluxRow batches through Doris Stream Load.
  *
- * <p>通过 Stream Load 将数据批量写入 Doris。
- * 内部维护一个行缓冲区，达到 {@code doris.batch.size} 阈值时
- * 触发一次 Stream Load HTTP 请求。
- *
- * <p>支持两种事务模式：
- * <ul>
- *   <li><b>非 2PC 模式</b>（默认）：每次 flush 立即提交，at-least-once 语义。</li>
- *   <li><b>2PC 模式</b>（{@code sink.enable-2pc=true}）：每次 flush 产生一个 PREPARE 事务，
- *       所有数据写入完成后在 {@link #commit()} 中统一提交，实现 exactly-once 语义。</li>
- * </ul>
+ * <p>The writer owns buffering, serialization and dirty-data reporting.
+ * Task-local 2PC transaction state belongs to
+ * {@link DorisTwoPhaseCommitController}.</p>
  */
-public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwareSinkWriter {
+public final class DorisSinkWriter
+        implements SinkWriter<FluxRow>, DirtyDataAwareSinkWriter {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(DorisSinkWriter.class);
 
     private final DorisSinkConfig config;
-    private final PreparedSinkMetadata metadata;
     private final DorisStreamLoadClient client;
-    private final List<FluxRow> buffer = new ArrayList<>();
-    private final boolean enable2pc;
+    private final DorisTwoPhaseCommitController transactions;
+    private final List<FluxRow> buffer =
+            new ArrayList<FluxRow>();
+
     private TableSchema schema;
     private DorisRowSerializer serializer;
-
-    private final List<String> pendingTxnIds = new ArrayList<>();
-
-    private long totalWrittenRows = 0;
-    private long totalLoadRequests = 0;
-    private long totalFilteredRows = 0;
+    private long totalWrittenRows;
+    private long totalLoadRequests;
+    private long totalFilteredRows;
 
     private DirtyDataCollector dirtyDataCollector;
     private DirtyDataContext dirtyDataContext;
 
-    public DorisSinkWriter(DorisSinkConfig config, PreparedSinkMetadata metadata) {
-        this.config = Objects.requireNonNull(config, "config must not be null");
-        this.metadata = Objects.requireNonNull(metadata, "metadata must not be null");
+    public DorisSinkWriter(
+            DorisSinkConfig config,
+            PreparedSinkMetadata metadata) {
+
+        this.config = Objects.requireNonNull(
+                config,
+                "config must not be null");
+        Objects.requireNonNull(
+                metadata,
+                "metadata must not be null");
+
         this.client = new DorisStreamLoadClient(config);
-        this.enable2pc = config.isEnable2pc();
+        this.transactions =
+                new DorisTwoPhaseCommitController(
+                        client,
+                        config.isEnable2pc());
     }
 
     @Override
     public void open() throws Exception {
-        LOG.info("Doris SinkWriter opened: database={}, table={}, batchSize={}, format={}, 2pc={}",
-                config.getDatabase(), config.getTable(),
-                config.getBatchSize(), config.getLoadFormat(), enable2pc);
+        LOG.info(
+                "Doris SinkWriter opened: database={}, table={}, batchSize={}, format={}, 2pc={}",
+                config.getDatabase(),
+                config.getTable(),
+                config.getBatchSize(),
+                config.getLoadFormat(),
+                transactions.isEnabled());
+
         if (dirtyDataCollector != null) {
             dirtyDataCollector.open();
         }
     }
 
     @Override
-    public void write(RecordBatch<FluxRow> batch, CatalogTable sourceTable) throws Exception {
-        if (batch == null || batch.isEndOfInput() || batch.getRecords().isEmpty()) {
+    public void write(
+            RecordBatch<FluxRow> batch,
+            CatalogTable sourceTable)
+            throws Exception {
+
+        if (batch == null
+                || batch.isEndOfInput()
+                || batch.getRecords().isEmpty()) {
             return;
         }
 
-        if (schema == null && sourceTable != null && sourceTable.getTableSchema() != null) {
-            schema = sourceTable.getTableSchema();
-        }
+        initializeSchema(sourceTable);
 
         for (FluxRow row : batch.getRecords()) {
             buffer.add(row);
@@ -103,35 +115,23 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
 
     @Override
     public void commit() throws Exception {
-        if (enable2pc && !pendingTxnIds.isEmpty()) {
-            LOG.info("Committing {} pending 2PC transactions...", pendingTxnIds.size());
-            try {
-                client.commitTransactions(pendingTxnIds);
-                LOG.info("All {} 2PC transactions committed successfully", pendingTxnIds.size());
-            } catch (IOException e) {
-                LOG.error("2PC commit failed, {} transactions may be in inconsistent state. "
-                        + "Committed transactions will not be rolled back.",
-                        pendingTxnIds.size(), e);
-                throw new IOException("Doris 2PC commit failed with " + pendingTxnIds.size()
-                        + " pending transactions. Some may have been committed. "
-                        + "Check Doris transaction state before retrying.", e);
-            }
-            pendingTxnIds.clear();
-        }
-        LOG.info("Doris SinkWriter commit: totalWrittenRows={}, totalLoadRequests={}, 2pc={}",
-                totalWrittenRows, totalLoadRequests, enable2pc);
+        transactions.commit();
+
+        LOG.info(
+                "Doris SinkWriter commit: totalWrittenRows={}, totalLoadRequests={}, 2pc={}",
+                totalWrittenRows,
+                totalLoadRequests,
+                transactions.isEnabled());
     }
 
     @Override
     public void abort() throws Exception {
         buffer.clear();
-        if (enable2pc && !pendingTxnIds.isEmpty()) {
-            LOG.warn("Aborting {} pending 2PC transactions...", pendingTxnIds.size());
-            client.abortTransactions(pendingTxnIds);
-            LOG.info("All {} 2PC transactions aborted", pendingTxnIds.size());
-            pendingTxnIds.clear();
-        }
-        LOG.warn("Doris SinkWriter aborted, buffer cleared. totalWrittenRows={}", totalWrittenRows);
+        transactions.abort();
+
+        LOG.warn(
+                "Doris SinkWriter aborted: totalWrittenRows={}",
+                totalWrittenRows);
     }
 
     @Override
@@ -141,39 +141,60 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
 
     @Override
     public String getRetryAdvice() {
-        if (enable2pc) {
-            return "Doris 2PC mode: data is PREPARED but not committed. "
-                    + "Safe to retry — uncommitted transactions will be aborted.";
-        }
-        return "Doris Stream Load commits per batch; verify already loaded data before retrying.";
+        return transactions.retryAdvice();
     }
 
     @Override
     public void close() throws Exception {
         try {
-            if (enable2pc && !pendingTxnIds.isEmpty()) {
-                LOG.warn("Closing with {} uncommitted 2PC transactions, aborting...", pendingTxnIds.size());
-                client.abortTransactions(pendingTxnIds);
-                pendingTxnIds.clear();
-            }
-            if (!enable2pc && !buffer.isEmpty()) {
-                flush();
-            }
+            closePendingWork();
         } finally {
-            try {
-                client.close();
-            } finally {
-                if (dirtyDataCollector != null) {
-                    try {
-                        dirtyDataCollector.close(true);
-                    } catch (Exception e) {
-                        LOG.warn("Failed to close dirty data collector", e);
-                    }
-                }
-            }
+            closeResources();
         }
-        LOG.info("Doris SinkWriter closed: totalWrittenRows={}, totalLoadRequests={}, totalFilteredRows={}, 2pc={}",
-                totalWrittenRows, totalLoadRequests, totalFilteredRows, enable2pc);
+
+        LOG.info(
+                "Doris SinkWriter closed: totalWrittenRows={}, totalLoadRequests={}, "
+                        + "totalFilteredRows={}, 2pc={}",
+                totalWrittenRows,
+                totalLoadRequests,
+                totalFilteredRows,
+                transactions.isEnabled());
+    }
+
+    @Override
+    public void configureDirtyData(
+            DirtyDataContext context)
+            throws Exception {
+
+        dirtyDataContext = Objects.requireNonNull(
+                context,
+                "context must not be null");
+
+        dirtyDataCollector =
+                new BoundedMemoryDirtyDataCollector(
+                        context.getTaskId(),
+                        100,
+                        1000,
+                        0.1);
+    }
+
+    @Override
+    public DirtyDataSummary getDirtyDataSummary() {
+        return dirtyDataCollector == null
+                ? DirtyDataSummary.empty()
+                : dirtyDataCollector.summary();
+    }
+
+    private void initializeSchema(
+            CatalogTable sourceTable) {
+
+        if (schema != null
+                || sourceTable == null
+                || sourceTable.getTableSchema() == null) {
+            return;
+        }
+
+        schema = sourceTable.getTableSchema();
     }
 
     private void flush() throws Exception {
@@ -181,87 +202,133 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
             return;
         }
 
-        if (schema == null) {
-            throw new IllegalStateException(
-                    "Cannot flush: table schema is not initialized. "
-                            + "Ensure at least one write() call provides a CatalogTable with schema.");
-        }
+        ensureSerializer();
 
-        if (serializer == null) {
-            serializer = new DorisRowSerializer(config, schema);
-        }
         String data = serializer.serialize(buffer);
 
-        LOG.debug("Flushing {} rows via Stream Load, data size={} bytes",
-                buffer.size(), data.length());
+        LOG.debug(
+                "Flushing {} rows via Doris Stream Load: payloadBytes={}",
+                buffer.size(),
+                data.length());
 
-        StreamLoadResponse response = client.load(data);
+        StreamLoadResponse response =
+                client.load(data);
+
         response.checkSuccess();
 
         totalWrittenRows += buffer.size();
         totalLoadRequests++;
 
-        LOG.debug("Stream Load success: label={}, loadedRows={}, txnId={}, txnState={}",
-                response.getLabel(), response.getNumberLoadedRows(),
-                response.getTxnId(), response.getTxnState());
+        LOG.debug(
+                "Doris Stream Load succeeded: label={}, loadedRows={}, txnId={}, txnState={}",
+                response.getLabel(),
+                response.getNumberLoadedRows(),
+                response.getTxnId(),
+                response.getTxnState());
 
-        if (response.getNumberFilteredRows() > 0) {
-            totalFilteredRows += response.getNumberFilteredRows();
-            LOG.warn("Stream Load filtered {} rows, message: {}",
-                    response.getNumberFilteredRows(), response.getMessage());
-
-            if (dirtyDataCollector != null) {
-                try {
-                    dirtyDataCollector.recordAttempt(buffer.size());
-                    String errorMsg = "Doris Stream Load filtered " + response.getNumberFilteredRows()
-                            + " rows: " + response.getMessage();
-                    if (response.getBody() != null && response.getBody().contains("ErrorURL")) {
-                        errorMsg += ", check ErrorURL for details";
-                    }
-                    DirtyRecord dirtyRecord = new DirtyRecord(
-                            "STREAM_LOAD_FILTERED",
-                            errorMsg,
-                            dirtyDataContext,
-                            System.currentTimeMillis());
-                    dirtyDataCollector.collect(dirtyRecord);
-                } catch (Exception e) {
-                    LOG.error("Failed to record dirty data", e);
-                }
-            }
-        }
-
-        if (enable2pc) {
-            String txnId = response.getTxnId();
-            if (txnId == null || txnId.isEmpty()) {
-                throw new IOException(
-                        "2PC enabled but Doris returned no TxnId. "
-                        + "Response: " + response.getBody());
-            }
-            if (!response.isPrepared()) {
-                throw new IOException(
-                        "2PC enabled but TxnState is not PREPARE: txnId=" + txnId
-                                + ", txnState=" + response.getTxnState()
-                                + ", response=" + response.getBody());
-            }
-            pendingTxnIds.add(txnId);
-            LOG.debug("Collected 2PC txnId={}, pending count={}", txnId, pendingTxnIds.size());
-        }
-
+        recordFilteredRows(response);
+        transactions.record(response);
         buffer.clear();
     }
 
-    @Override
-    public void configureDirtyData(DirtyDataContext context) throws Exception {
-        this.dirtyDataContext = context;
-        this.dirtyDataCollector = new com.link.up.api.dirtydata.BoundedMemoryDirtyDataCollector(
-                context.getTaskId(), 100, 1000, 0.1);
+    private void ensureSerializer() {
+        if (schema == null) {
+            throw new IllegalStateException(
+                    "Cannot flush: table schema is not initialized. "
+                            + "Ensure at least one write() call provides "
+                            + "a CatalogTable with schema.");
+        }
+
+        if (serializer == null) {
+            serializer =
+                    new DorisRowSerializer(
+                            config,
+                            schema);
+        }
     }
 
-    @Override
-    public DirtyDataSummary getDirtyDataSummary() {
-        if (dirtyDataCollector != null) {
-            return dirtyDataCollector.summary();
+    private void recordFilteredRows(
+            StreamLoadResponse response) {
+
+        if (response.getNumberFilteredRows() <= 0) {
+            return;
         }
-        return DirtyDataSummary.empty();
+
+        totalFilteredRows +=
+                response.getNumberFilteredRows();
+
+        LOG.warn(
+                "Doris Stream Load filtered {} rows: {}",
+                response.getNumberFilteredRows(),
+                response.getMessage());
+
+        if (dirtyDataCollector == null) {
+            return;
+        }
+
+        try {
+            dirtyDataCollector.recordAttempt(
+                    buffer.size());
+
+            String message =
+                    "Doris Stream Load filtered "
+                            + response.getNumberFilteredRows()
+                            + " rows: "
+                            + response.getMessage();
+
+            if (response.getBody() != null
+                    && response.getBody().contains("ErrorURL")) {
+                message += ", check ErrorURL for details";
+            }
+
+            dirtyDataCollector.collect(
+                    new DirtyRecord(
+                            "STREAM_LOAD_FILTERED",
+                            message,
+                            dirtyDataContext,
+                            System.currentTimeMillis()));
+
+        } catch (Exception failure) {
+            LOG.error(
+                    "Failed to record Doris dirty-data evidence",
+                    failure);
+        }
+    }
+
+    private void closePendingWork()
+            throws Exception {
+
+        if (transactions.isEnabled()) {
+            transactions.close();
+            return;
+        }
+
+        if (!buffer.isEmpty()) {
+            flush();
+        }
+    }
+
+    private void closeResources()
+            throws Exception {
+
+        try {
+            client.close();
+        } finally {
+            closeDirtyDataCollector();
+        }
+    }
+
+    private void closeDirtyDataCollector() {
+        if (dirtyDataCollector == null) {
+            return;
+        }
+
+        try {
+            dirtyDataCollector.close(true);
+        } catch (Exception failure) {
+            LOG.warn(
+                    "Failed to close dirty data collector",
+                    failure);
+        }
     }
 }

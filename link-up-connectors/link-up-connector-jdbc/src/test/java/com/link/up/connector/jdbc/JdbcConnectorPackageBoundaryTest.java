@@ -26,6 +26,19 @@ public class JdbcConnectorPackageBoundaryTest {
     }
 
     @Test
+    public void splitStatisticsPlanningBelongsToSourceRole()
+            throws Exception {
+
+        Class<?> service =
+                Class.forName(
+                        "com.link.up.connector.jdbc.source.JdbcSplitPlanningService");
+
+        assertEquals(
+                "com.link.up.connector.jdbc.source",
+                service.getPackage().getName());
+    }
+
+    @Test
     public void genericUtilsRootPackageMustNotExist() {
         File root =
                 new File(
@@ -52,11 +65,16 @@ public class JdbcConnectorPackageBoundaryTest {
                         "src/main/java/com/link/up/connector/jdbc/core");
 
         assertTrue(
-                "The current legacy JDBC core directory is expected during incremental migration",
+                "The current legacy JDBC core directory is expected "
+                        + "during incremental migration",
                 core.isDirectory());
 
-        File[] children = core.listFiles(File::isDirectory);
-        Set<String> actual = new HashSet<String>();
+        File[] children =
+                core.listFiles(File::isDirectory);
+
+        Set<String> actual =
+                new HashSet<String>();
+
         if (children != null) {
             for (File child : children) {
                 actual.add(child.getName());
@@ -71,7 +89,8 @@ public class JdbcConnectorPackageBoundaryTest {
                                 "split"));
 
         assertEquals(
-                "Do not add new JDBC core subdomains; create a top-level role package instead",
+                "Do not add new JDBC core subdomains; "
+                        + "create a top-level role package instead",
                 allowed,
                 actual);
     }
