@@ -9,10 +9,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/**
- * REST Servlet 基类。
- */
+/** Base servlet for Link-Up REST adapters. */
 public abstract class FluxServlet
         extends HttpServlet {
 
@@ -43,7 +42,6 @@ public abstract class FluxServlet
 
         ServletInputStream input =
                 request.getInputStream();
-
         ByteArrayOutputStream output =
                 new ByteArrayOutputStream();
 
@@ -79,8 +77,7 @@ public abstract class FluxServlet
             String name,
             int defaultValue) {
 
-        String value =
-                request.getParameter(name);
+        String value = request.getParameter(name);
 
         if (value == null
                 || value.trim().isEmpty()) {
@@ -89,7 +86,7 @@ public abstract class FluxServlet
 
         try {
             return Integer.parseInt(value);
-        } catch (NumberFormatException exception) {
+        } catch (NumberFormatException failure) {
             throw new IllegalArgumentException(
                     name + " must be an integer");
         }
@@ -100,8 +97,7 @@ public abstract class FluxServlet
             String name,
             long defaultValue) {
 
-        String value =
-                request.getParameter(name);
+        String value = request.getParameter(name);
 
         if (value == null
                 || value.trim().isEmpty()) {
@@ -110,7 +106,7 @@ public abstract class FluxServlet
 
         try {
             return Long.parseLong(value);
-        } catch (NumberFormatException exception) {
+        } catch (NumberFormatException failure) {
             throw new IllegalArgumentException(
                     name + " must be a long integer");
         }
@@ -119,9 +115,7 @@ public abstract class FluxServlet
     protected List<String> pathSegments(
             HttpServletRequest request) {
 
-        String path =
-                request.getPathInfo();
-
+        String path = request.getPathInfo();
         List<String> segments =
                 new ArrayList<String>();
 
@@ -130,15 +124,10 @@ public abstract class FluxServlet
             return segments;
         }
 
-        String[] values =
-                path.split("/");
-
-        for (String value : values) {
+        for (String value : path.split("/")) {
             if (value != null
                     && !value.trim().isEmpty()) {
-
-                segments.add(
-                        value.trim());
+                segments.add(value.trim());
             }
         }
 
@@ -148,25 +137,11 @@ public abstract class FluxServlet
     protected void validateSubmitContentType(
             HttpServletRequest request) {
 
-        String contentType =
-                request.getContentType();
+        String mediaType = mediaType(request);
 
-        if (contentType == null) {
+        if (mediaType == null) {
             return;
         }
-
-        int semicolon =
-                contentType.indexOf(';');
-
-        String mediaType =
-                (semicolon >= 0
-                        ? contentType.substring(
-                        0,
-                        semicolon)
-                        : contentType)
-                        .trim()
-                        .toLowerCase(
-                                java.util.Locale.ROOT);
 
         if (!"application/hocon".equals(mediaType)
                 && !"text/plain".equals(mediaType)
@@ -178,6 +153,26 @@ public abstract class FluxServlet
                     "Unsupported Content-Type: "
                             + mediaType);
         }
+    }
+
+    protected boolean isJsonContentType(
+            HttpServletRequest request) {
+        return "application/json".equals(
+                mediaType(request));
+    }
+
+    protected void requireJsonContentType(
+            HttpServletRequest request,
+            String message) {
+
+        if (isJsonContentType(request)) {
+            return;
+        }
+
+        throw new RestException(
+                415,
+                "FLUX-REST-415",
+                message);
     }
 
     protected final RestException methodNotAllowed(
@@ -194,28 +189,48 @@ public abstract class FluxServlet
     protected void doPut(
             HttpServletRequest request,
             HttpServletResponse response) {
-
         throw methodNotAllowed(request);
     }
 
     protected void doDelete(
             HttpServletRequest request,
-            HttpServletResponse response) throws IOException{
-
+            HttpServletResponse response)
+            throws IOException {
         throw methodNotAllowed(request);
     }
 
     protected void doPost(
             HttpServletRequest request,
-            HttpServletResponse response) throws IOException{
-
+            HttpServletResponse response)
+            throws IOException {
         throw methodNotAllowed(request);
     }
 
     protected void doGet(
             HttpServletRequest request,
-            HttpServletResponse response) throws IOException{
-
+            HttpServletResponse response)
+            throws IOException {
         throw methodNotAllowed(request);
+    }
+
+    private String mediaType(
+            HttpServletRequest request) {
+
+        String contentType = request.getContentType();
+
+        if (contentType == null) {
+            return null;
+        }
+
+        int separator = contentType.indexOf(';');
+        String value =
+                separator >= 0
+                        ? contentType.substring(
+                                0,
+                                separator)
+                        : contentType;
+
+        return value.trim()
+                .toLowerCase(Locale.ROOT);
     }
 }

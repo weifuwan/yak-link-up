@@ -1,15 +1,11 @@
 package com.link.up.server.infrastructure.runtime;
 
-import com.link.up.framework.execution.JobExecution;
-import com.link.up.framework.execution.JobExecutionListener;
 import com.link.up.framework.job.JobDefinition;
-import com.link.up.framework.job.JobResult;
 import com.link.up.framework.metrics.JobMetrics;
 import com.link.up.server.application.port.JobExecutor;
 import com.link.up.server.application.port.JobRuntimeScheduler;
 
 import java.util.Objects;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -18,11 +14,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Local Worker scheduler that owns admission, job threads and framework
- * execution bindings.
+ * Local Worker scheduler that owns admission, job threads and shutdown.
  *
- * <p>This adapter intentionally preserves the existing single-node admission
- * semantics: one permit is held for each accepted queued/running job.</p>
+ * <p>The accepted job's Thread/Framework execution binding belongs to
+ * {@link ActiveJobExecution}; invoking the Framework belongs to
+ * {@link LocalJobRunner}.</p>
  */
 public final class LocalJobRuntimeScheduler
         implements JobRuntimeScheduler {
@@ -30,7 +26,7 @@ public final class LocalJobRuntimeScheduler
     private final int maxActiveJobs;
     private final Semaphore admissionSemaphore;
     private final long shutdownTimeoutMillis;
-    private final JobExecutor jobExecutor;
+    private final LocalJobRunner jobRunner;
     private final ConcurrentMap<String, ActiveJobExecution> activeJobs =
             new ConcurrentHashMap<String, ActiveJobExecution>();
     private final AtomicInteger threadSequence =
@@ -50,10 +46,14 @@ public final class LocalJobRuntimeScheduler
 
         this.maxActiveJobs = maxActiveJobs;
         this.shutdownTimeoutMillis =
-                Math.max(0L, shutdownTimeoutMillis);
-        this.jobExecutor = Objects.requireNonNull(
-                jobExecutor,
-                "jobExecutor must not be null");
+                Math.max(
+                        0L,
+                        shutdownTimeoutMillis);
+        this.jobRunner =
+                new LocalJobRunner(
+                        Objects.requireNonNull(
+                                jobExecutor,
+                                "jobExecutor must not be null"));
         this.admissionSemaphore =
                 new Semaphore(maxActiveJobs);
     }
@@ -65,7 +65,12 @@ public final class LocalJobRuntimeScheduler
             final Listener listener) {
 
         ensureOpen();
-        requireText(jobId, "jobId");
+
+        String normalizedJobId =
+                requireText(
+                        jobId,
+                        "jobId");
+
         Objects.requireNonNull(
                 definition,
                 "definition must not be null");
@@ -73,122 +78,55 @@ public final class LocalJobRuntimeScheduler
                 listener,
                 "listener must not be null");
 
-        if (!admissionSemaphore.tryAcquire()) {
-            throw new RejectedExecutionException(
-                    "Job queue is full (maxQueuedJobs="
-                            + maxActiveJobs
-                            + ")");
-        }
+        acquireAdmission();
 
         final ActiveJobExecution active =
-                new ActiveJobExecution(jobId, listener);
+                new ActiveJobExecution(
+                        normalizedJobId,
+                        listener);
 
         ActiveJobExecution previous =
-                activeJobs.putIfAbsent(jobId, active);
+                activeJobs.putIfAbsent(
+                        normalizedJobId,
+                        active);
 
         if (previous != null) {
             admissionSemaphore.release();
             throw new IllegalStateException(
-                    "Duplicate active jobId: " + jobId);
+                    "Duplicate active jobId: "
+                            + normalizedJobId);
         }
 
         try {
             listener.onQueued();
 
             Thread thread =
-                    new Thread(
-                            new Runnable() {
-                                @Override
-                                public void run() {
-                                    runJob(
-                                            active,
-                                            definition);
-                                }
-                            },
-                            "link-up-job-"
-                                    + jobId
-                                    + "-"
-                                    + threadSequence.incrementAndGet());
-            thread.setDaemon(false);
+                    createJobThread(
+                            active,
+                            definition);
+
             active.bindThread(thread);
             thread.start();
+
         } catch (RuntimeException failure) {
-            activeJobs.remove(jobId, active);
+            activeJobs.remove(
+                    normalizedJobId,
+                    active);
             admissionSemaphore.release();
             throw failure;
         }
     }
 
-    private void runJob(
-            final ActiveJobExecution active,
-            JobDefinition definition) {
-
-        try {
-            if (!active.listener.onStarting()) {
-                active.listener.onCompleted(
-                        null,
-                        null,
-                        true);
-                return;
-            }
-
-            JobResult result =
-                    jobExecutor.execute(
-                            definition,
-                            new JobExecutionListener() {
-                                @Override
-                                public void onJobLogCreated(
-                                        String runId,
-                                        String jobLogFile) {
-                                    active.listener.onJobLogCreated(
-                                            runId,
-                                            jobLogFile);
-                                }
-
-                                @Override
-                                public void onJobExecutionCreated(
-                                        JobExecution execution) {
-                                    active.bindExecution(execution);
-                                }
-                            });
-
-            active.listener.onCompleted(
-                    result,
-                    null,
-                    false);
-
-        } catch (Throwable failure) {
-            boolean cancellationLike =
-                    active.isCancellationRequested()
-                            || failure instanceof CancellationException
-                            || failure instanceof InterruptedException;
-
-            if (failure instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-
-            active.listener.onCompleted(
-                    null,
-                    failure,
-                    cancellationLike);
-
-            if (failure instanceof Error) {
-                throw (Error) failure;
-            }
-        } finally {
-            active.clearExecution();
-            activeJobs.remove(
-                    active.jobId,
-                    active);
-            admissionSemaphore.release();
-        }
-    }
-
     @Override
     public void cancel(String jobId) {
-        requireText(jobId, "jobId");
+        String normalizedJobId =
+                requireText(
+                        jobId,
+                        "jobId");
+
         ActiveJobExecution active =
-                activeJobs.get(jobId);
+                activeJobs.get(normalizedJobId);
+
         if (active != null) {
             active.cancel();
         }
@@ -198,6 +136,7 @@ public final class LocalJobRuntimeScheduler
     public JobMetrics getMetrics(String jobId) {
         ActiveJobExecution active =
                 activeJobs.get(jobId);
+
         return active == null
                 ? null
                 : active.getMetrics();
@@ -214,36 +153,99 @@ public final class LocalJobRuntimeScheduler
             return;
         }
 
+        cancelActiveJobs();
+        awaitActiveJobs();
+        notifyLostJobs();
+    }
+
+    private void acquireAdmission() {
+        if (admissionSemaphore.tryAcquire()) {
+            return;
+        }
+
+        throw new RejectedExecutionException(
+                "Job queue is full (maxQueuedJobs="
+                        + maxActiveJobs
+                        + ")");
+    }
+
+    private Thread createJobThread(
+            final ActiveJobExecution active,
+            final JobDefinition definition) {
+
+        Thread thread =
+                new Thread(
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                runScheduledJob(
+                                        active,
+                                        definition);
+                            }
+                        },
+                        "link-up-job-"
+                                + active.getJobId()
+                                + "-"
+                                + threadSequence.incrementAndGet());
+
+        thread.setDaemon(false);
+        return thread;
+    }
+
+    private void runScheduledJob(
+            ActiveJobExecution active,
+            JobDefinition definition) {
+
+        try {
+            jobRunner.run(
+                    active,
+                    definition);
+        } finally {
+            activeJobs.remove(
+                    active.getJobId(),
+                    active);
+            admissionSemaphore.release();
+        }
+    }
+
+    private void cancelActiveJobs() {
         for (ActiveJobExecution active : activeJobs.values()) {
             active.cancel();
         }
+    }
 
+    private void awaitActiveJobs() {
         long deadline =
                 System.currentTimeMillis()
                         + shutdownTimeoutMillis;
 
         for (ActiveJobExecution active : activeJobs.values()) {
             Thread thread = active.getThread();
+
             if (thread == null) {
                 continue;
             }
 
             long remaining =
-                    deadline - System.currentTimeMillis();
+                    deadline
+                            - System.currentTimeMillis();
+
             if (remaining <= 0L) {
-                break;
+                return;
             }
 
             try {
                 thread.join(remaining);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                break;
+                return;
             }
         }
+    }
 
+    private void notifyLostJobs() {
         for (ActiveJobExecution active : activeJobs.values()) {
-            active.listener.onLost();
+            active.getListener().onLost();
         }
     }
 
@@ -257,79 +259,13 @@ public final class LocalJobRuntimeScheduler
     private static String requireText(
             String value,
             String name) {
-        if (value == null || value.trim().isEmpty()) {
+
+        if (value == null
+                || value.trim().isEmpty()) {
             throw new IllegalArgumentException(
                     name + " must not be blank");
         }
+
         return value.trim();
-    }
-
-    /** Runtime-only binding for a scheduled job. */
-    private static final class ActiveJobExecution {
-        private final String jobId;
-        private final Listener listener;
-        private volatile Thread thread;
-        private volatile JobExecution execution;
-        private volatile boolean cancellationRequested;
-
-        private ActiveJobExecution(
-                String jobId,
-                Listener listener) {
-            this.jobId = jobId;
-            this.listener = listener;
-        }
-
-        private synchronized void bindThread(
-                Thread thread) {
-            this.thread = Objects.requireNonNull(
-                    thread,
-                    "thread must not be null");
-            if (cancellationRequested) {
-                thread.interrupt();
-            }
-        }
-
-        private synchronized void bindExecution(
-                JobExecution execution) {
-            this.execution = Objects.requireNonNull(
-                    execution,
-                    "execution must not be null");
-            if (cancellationRequested) {
-                execution.cancel();
-            }
-        }
-
-        private synchronized void cancel() {
-            cancellationRequested = true;
-
-            JobExecution currentExecution = execution;
-            if (currentExecution != null) {
-                currentExecution.cancel();
-            }
-
-            Thread currentThread = thread;
-            if (currentThread != null) {
-                currentThread.interrupt();
-            }
-        }
-
-        private synchronized void clearExecution() {
-            execution = null;
-        }
-
-        private boolean isCancellationRequested() {
-            return cancellationRequested;
-        }
-
-        private Thread getThread() {
-            return thread;
-        }
-
-        private JobMetrics getMetrics() {
-            JobExecution currentExecution = execution;
-            return currentExecution == null
-                    ? null
-                    : currentExecution.getMetrics();
-        }
     }
 }
