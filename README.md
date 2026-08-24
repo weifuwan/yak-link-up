@@ -59,8 +59,23 @@ HTTP / registration
     -> JobApplication
        -> JobApplicationService
           -> JobExecutionState
+             -> JobExecutionAttempt
           -> application ports
-             -> LocalJobRuntimeScheduler / LocalJobExecutor / InMemoryJobRepository
+             -> LocalJobRuntimeScheduler / LocalJobExecutor / FileJobRepository
+```
+
+Worker control-plane checkpoints are durable by default. A stable Job identity owns execution attempts, while a local
+versioned checkpoint records lifecycle/idempotency/attempt state. On process restart, any persisted non-terminal Job is
+recovered deterministically as `LOST`; it is not automatically retried.
+
+```text
+Job
+  -> Attempt #1
+      -> QUEUED -> RUNNING -> SUCCEEDED / FAILED / CANCELED / LOST
+
+state transition
+  -> JobRepository upsert
+      -> data/worker-state/<job>.job.json
 ```
 
 Built-in connectors use the same role vocabulary for their internal structure:
@@ -84,7 +99,8 @@ See [architecture](docs/architecture.md),
 [ADR-0003](docs/adr/0003-runtime-role-separation.md),
 [ADR-0004](docs/adr/0004-source-enumerator-coordination.md),
 [ADR-0005](docs/adr/0005-connector-package-roles.md),
-[ADR-0006](docs/adr/0006-server-control-plane-boundaries.md), and the
+[ADR-0006](docs/adr/0006-server-control-plane-boundaries.md),
+[ADR-0007](docs/adr/0007-worker-checkpoint-attempts.md), and the
 [connector development guide](docs/connector-development.md).
 
 ## Quick start
@@ -123,8 +139,9 @@ CREATED -> SUBMITTED -> QUEUED -> RUNNING
 ```
 
 The JSON submit protocol supports control-plane `externalExecutionId`, `idempotencyKey`, definition versioning,
-auditable state transitions, worker instance identity and deterministic duplicate submission handling. The previous
-HOCON body submission remains available for CLI and compatibility use.
+auditable state transitions, Worker instance identity, execution-attempt history and deterministic duplicate submission
+handling. Checkpoints default to `data/worker-state`; use `--state-dir` to override the directory. The previous HOCON body
+submission remains available for CLI and compatibility use.
 
 See [the single-node offline Worker protocol](docs/worker-protocol.md) for the complete API and state ownership contract.
 

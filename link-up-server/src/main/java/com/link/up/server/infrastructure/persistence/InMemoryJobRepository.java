@@ -7,14 +7,13 @@ import com.link.up.server.runtime.JobSnapshot;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * Bounded in-memory terminal history adapter.
- */
+/** Bounded in-memory checkpoint/history adapter used by tests and embeddings. */
 public final class InMemoryJobRepository
         implements JobRepository {
 
@@ -40,27 +39,26 @@ public final class InMemoryJobRepository
     }
 
     @Override
-    public void save(
+    public synchronized void save(
             JobSnapshot snapshot,
             JobExecutionMetadata executionMetadata) {
 
-        JobSnapshot previous =
-                snapshots.put(
-                        snapshot.getJobId(),
-                        snapshot);
+        JobExecutionMetadata current =
+                metadata.get(snapshot.getJobId());
+        if (isStale(current, executionMetadata)) {
+            return;
+        }
 
+        JobSnapshot previous = snapshots.put(
+                snapshot.getJobId(),
+                snapshot);
         if (executionMetadata != null) {
-            metadata.put(
-                    snapshot.getJobId(),
-                    executionMetadata);
+            metadata.put(snapshot.getJobId(), executionMetadata);
         }
-
         if (previous == null) {
-            orderedJobIds.addFirst(
-                    snapshot.getJobId());
+            orderedJobIds.addFirst(snapshot.getJobId());
         }
-
-        trim();
+        trimTerminalHistory();
     }
 
     @Override
@@ -75,16 +73,13 @@ public final class InMemoryJobRepository
 
     @Override
     public List<JobSnapshot> list() {
-        List<JobSnapshot> result =
-                new ArrayList<JobSnapshot>();
-
+        List<JobSnapshot> result = new ArrayList<JobSnapshot>();
         for (String jobId : orderedJobIds) {
             JobSnapshot snapshot = snapshots.get(jobId);
             if (snapshot != null) {
                 result.add(snapshot);
             }
         }
-
         Collections.sort(
                 result,
                 new Comparator<JobSnapshot>() {
@@ -97,18 +92,51 @@ public final class InMemoryJobRepository
                                 left.getCreateTimeMillis());
                     }
                 });
-
         return result;
     }
 
-    private void trim() {
-        while (snapshots.size() > historyLimit) {
-            String oldestJobId = orderedJobIds.pollLast();
-            if (oldestJobId == null) {
+    @Override
+    public synchronized void delete(String jobId) {
+        snapshots.remove(jobId);
+        metadata.remove(jobId);
+        orderedJobIds.remove(jobId);
+    }
+
+    private static boolean isStale(
+            JobExecutionMetadata current,
+            JobExecutionMetadata candidate) {
+        return current != null
+                && candidate != null
+                && candidate.getCheckpointVersion()
+                < current.getCheckpointVersion();
+    }
+
+    private void trimTerminalHistory() {
+        while (terminalCount() > historyLimit) {
+            String oldestTerminal = null;
+            Iterator<String> iterator = orderedJobIds.descendingIterator();
+            while (iterator.hasNext()) {
+                String jobId = iterator.next();
+                JobSnapshot snapshot = snapshots.get(jobId);
+                if (snapshot != null && snapshot.getStatus().isTerminal()) {
+                    oldestTerminal = jobId;
+                    break;
+                }
+            }
+            if (oldestTerminal == null) {
                 return;
             }
-            snapshots.remove(oldestJobId);
-            metadata.remove(oldestJobId);
+            delete(oldestTerminal);
         }
+    }
+
+    private int terminalCount() {
+        int count = 0;
+        for (JobSnapshot snapshot : snapshots.values()) {
+            if (snapshot.getStatus().isTerminal()) {
+                count++;
+            }
+        }
+        return count;
     }
 }

@@ -5,10 +5,12 @@ import com.link.up.framework.job.JobResult;
 import com.link.up.framework.job.JobStatus;
 import com.link.up.server.application.port.JobIdGenerator;
 import com.link.up.server.application.port.JobRepository;
+import com.link.up.server.application.port.JobRepositoryEntry;
 import com.link.up.server.application.port.JobRuntimeScheduler;
 import com.link.up.server.domain.JobExecutionState;
 import com.link.up.server.domain.JobSubmission;
 import com.link.up.server.runtime.JobExecutionMetadata;
+import com.link.up.server.runtime.JobRecoverySnapshotFactory;
 import com.link.up.server.runtime.JobSnapshot;
 import com.link.up.server.runtime.JobSnapshotFactory;
 import com.link.up.server.runtime.JobStateConflictException;
@@ -25,15 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Single-node Worker application service.
- *
- * <p>Owns use-case orchestration and idempotency semantics. Local admission,
- * threads and framework execution bindings are delegated to
- * {@link JobRuntimeScheduler}.</p>
- */
+/** Single-node Worker application service with durable control-plane checkpoints. */
 public final class JobApplicationService
         implements JobApplication {
+
+    private static final String RESTART_LOST_REASON =
+            "Worker restarted before the job reached a terminal state";
 
     private final JobRuntimeScheduler runtimeScheduler;
     private final JobRepository repository;
@@ -41,8 +40,7 @@ public final class JobApplicationService
     private final JobSubmissionRegistry submissionRegistry;
     private final ConcurrentMap<String, JobExecutionState> activeJobs =
             new ConcurrentHashMap<String, JobExecutionState>();
-    private final AtomicBoolean closed =
-            new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public JobApplicationService(
             JobRuntimeScheduler runtimeScheduler,
@@ -59,6 +57,8 @@ public final class JobApplicationService
                 jobIdGenerator,
                 "jobIdGenerator must not be null");
         this.submissionRegistry = new JobSubmissionRegistry();
+
+        recoverPersistedJobs();
     }
 
     @Override
@@ -94,6 +94,7 @@ public final class JobApplicationService
         try {
             submissionRegistry.register(jobId, submission);
             state.markSubmitted();
+            checkpoint(state);
             runtimeScheduler.schedule(
                     jobId,
                     submission.getDefinition(),
@@ -101,6 +102,7 @@ public final class JobApplicationService
         } catch (RuntimeException failure) {
             activeJobs.remove(jobId, state);
             submissionRegistry.unregister(jobId, submission);
+            repository.delete(jobId);
             throw failure;
         }
 
@@ -114,11 +116,16 @@ public final class JobApplicationService
             @Override
             public void onQueued() {
                 state.markQueued();
+                checkpoint(state);
             }
 
             @Override
             public boolean onStarting() {
-                return state.markRunning();
+                boolean started = state.markRunning();
+                if (started) {
+                    checkpoint(state);
+                }
+                return started;
             }
 
             @Override
@@ -126,6 +133,7 @@ public final class JobApplicationService
                     String runId,
                     String jobLogFile) {
                 state.bindLogIdentity(runId, jobLogFile);
+                checkpoint(state);
             }
 
             @Override
@@ -158,6 +166,40 @@ public final class JobApplicationService
                         null);
             }
         };
+    }
+
+    private void recoverPersistedJobs() {
+        List<JobRepositoryEntry> persisted =
+                repository.listEntries();
+
+        for (JobRepositoryEntry entry : persisted) {
+            JobSnapshot snapshot = entry.getSnapshot();
+            JobExecutionMetadata metadata = entry.getMetadata();
+
+            if (metadata != null) {
+                submissionRegistry.restore(
+                        snapshot.getJobId(),
+                        metadata);
+            }
+
+            if (!snapshot.getStatus().isTerminal()) {
+                long recoveryTimeMillis =
+                        System.currentTimeMillis();
+                JobSnapshot lost =
+                        JobRecoverySnapshotFactory.recoverLost(
+                                snapshot,
+                                recoveryTimeMillis,
+                                RESTART_LOST_REASON);
+                JobExecutionMetadata recoveredMetadata =
+                        metadata == null
+                                ? null
+                                : metadata.recoverLost(
+                                        snapshot.getStatus(),
+                                        recoveryTimeMillis,
+                                        RESTART_LOST_REASON);
+                repository.save(lost, recoveredMetadata);
+            }
+        }
     }
 
     private JobSnapshot findExistingSubmission(
@@ -240,15 +282,19 @@ public final class JobApplicationService
             return;
         }
 
-        JobSnapshot snapshot = snapshot(state);
-        JobExecutionMetadata metadata =
-                JobSnapshotFactory.metadata(state);
-        repository.save(snapshot, metadata);
+        repository.save(
+                snapshot(state),
+                JobExecutionMetadata.fromState(state));
         activeJobs.remove(state.getJobId(), state);
     }
 
-    private JobSnapshot snapshot(
-            JobExecutionState state) {
+    private void checkpoint(JobExecutionState state) {
+        repository.save(
+                snapshot(state),
+                JobExecutionMetadata.fromState(state));
+    }
+
+    private JobSnapshot snapshot(JobExecutionState state) {
         return JobSnapshotFactory.create(
                 state,
                 runtimeScheduler.getMetrics(
@@ -273,10 +319,9 @@ public final class JobApplicationService
     public JobSnapshot getJobByExternalExecutionId(
             String externalExecutionId) {
 
-        String externalId =
-                requireText(
-                        externalExecutionId,
-                        "externalExecutionId");
+        String externalId = requireText(
+                externalExecutionId,
+                "externalExecutionId");
         String jobId =
                 submissionRegistry.findByExternalExecutionId(
                         externalId);
@@ -291,7 +336,7 @@ public final class JobApplicationService
         requireText(jobId, "jobId");
         JobExecutionState active = activeJobs.get(jobId);
         if (active != null) {
-            return JobSnapshotFactory.metadata(active);
+            return JobExecutionMetadata.fromState(active);
         }
         return repository.getMetadata(jobId);
     }
@@ -338,6 +383,7 @@ public final class JobApplicationService
             throw new JobNotFoundException(jobId);
         }
         state.requestCancellation();
+        checkpoint(state);
         runtimeScheduler.cancel(jobId);
         return getJob(jobId);
     }

@@ -11,13 +11,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Mutable control-plane state for one Worker job execution.
- *
- * <p>This aggregate owns lifecycle state, timestamps, cancellation intent and
- * terminal result only. It deliberately does not own Thread, Future,
- * ExecutorService, Semaphore, or framework JobExecution instances.</p>
- */
+/** Mutable control-plane state for one Worker job and its execution attempts. */
 public final class JobExecutionState {
 
     private final String jobId;
@@ -25,14 +19,16 @@ public final class JobExecutionState {
     private final long createTimeMillis;
     private final List<JobStateTransition> transitions =
             new ArrayList<JobStateTransition>();
+    private final List<JobExecutionAttempt> attempts =
+            new ArrayList<JobExecutionAttempt>();
 
     private volatile long submittedTimeMillis;
     private volatile long queuedTimeMillis;
     private volatile long startTimeMillis;
     private volatile long endTimeMillis;
     private volatile long stateVersion;
-    private volatile ServerJobStatus status =
-            ServerJobStatus.CREATED;
+    private volatile long checkpointVersion;
+    private volatile ServerJobStatus status = ServerJobStatus.CREATED;
     private volatile boolean cancellationRequested;
     private volatile JobResult result;
     private volatile Throwable failure;
@@ -48,6 +44,7 @@ public final class JobExecutionState {
                 submission,
                 "submission must not be null");
         this.createTimeMillis = System.currentTimeMillis();
+        this.attempts.add(new JobExecutionAttempt(this.jobId, 1));
 
         transitions.add(
                 new JobStateTransition(
@@ -60,16 +57,13 @@ public final class JobExecutionState {
 
     public synchronized void markSubmitted() {
         submittedTimeMillis = System.currentTimeMillis();
-        transition(
-                ServerJobStatus.SUBMITTED,
-                "submission-accepted");
+        transition(ServerJobStatus.SUBMITTED, "submission-accepted");
     }
 
     public synchronized void markQueued() {
+        currentAttempt().markQueued();
         queuedTimeMillis = System.currentTimeMillis();
-        transition(
-                ServerJobStatus.QUEUED,
-                "worker-queue-accepted");
+        transition(ServerJobStatus.QUEUED, "worker-queue-accepted");
     }
 
     public synchronized boolean markRunning() {
@@ -77,11 +71,9 @@ public final class JobExecutionState {
                 || cancellationRequested) {
             return false;
         }
-
+        currentAttempt().markRunning();
         startTimeMillis = System.currentTimeMillis();
-        transition(
-                ServerJobStatus.RUNNING,
-                "execution-started");
+        transition(ServerJobStatus.RUNNING, "execution-started");
         return true;
     }
 
@@ -90,18 +82,19 @@ public final class JobExecutionState {
             String jobLogFile) {
         this.runId = requireText(runId, "runId");
         this.jobLogFile = requireText(jobLogFile, "jobLogFile");
+        currentAttempt().bindLogIdentity(this.runId, this.jobLogFile);
+        checkpointVersion++;
     }
 
     public synchronized boolean requestCancellation() {
         if (status.isTerminal()) {
-            throw new JobStateConflictException(
-                    jobId,
-                    status);
+            throw new JobStateConflictException(jobId, status);
         }
         if (cancellationRequested) {
             return false;
         }
         cancellationRequested = true;
+        checkpointVersion++;
         return true;
     }
 
@@ -110,8 +103,7 @@ public final class JobExecutionState {
             JobResult result,
             Throwable failure) {
 
-        if (finalStatus == null
-                || !finalStatus.isTerminal()) {
+        if (finalStatus == null || !finalStatus.isTerminal()) {
             throw new IllegalArgumentException(
                     "finalStatus must be terminal");
         }
@@ -119,24 +111,25 @@ public final class JobExecutionState {
             return false;
         }
 
+        currentAttempt().complete(finalStatus, result, failure);
         this.result = result;
         this.failure = failure;
         this.endTimeMillis = System.currentTimeMillis();
-        transition(
-                finalStatus,
-                terminalReason(
-                        finalStatus,
-                        failure));
+        transition(finalStatus, terminalReason(finalStatus, failure));
         return true;
+    }
+
+    private JobExecutionAttempt currentAttempt() {
+        return attempts.get(attempts.size() - 1);
     }
 
     private void transition(
             ServerJobStatus target,
             String reason) {
-
         ServerJobStatus previous = status;
         JobStateMachine.requireTransition(previous, target);
         stateVersion++;
+        checkpointVersion++;
         status = target;
         transitions.add(
                 new JobStateTransition(
@@ -165,83 +158,38 @@ public final class JobExecutionState {
                 + failure.getClass().getSimpleName();
     }
 
-    private static String requireText(
-            String value,
-            String name) {
+    private static String requireText(String value, String name) {
         if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(
-                    name + " must not be blank");
+            throw new IllegalArgumentException(name + " must not be blank");
         }
         return value.trim();
     }
 
-    public String getJobId() {
-        return jobId;
-    }
-
-    public String getJobName() {
-        return submission.getDefinition().getName();
-    }
-
-    public JobSubmission getSubmission() {
-        return submission;
-    }
-
-    public JobDefinition getDefinition() {
-        return submission.getDefinition();
-    }
-
-    public long getCreateTimeMillis() {
-        return createTimeMillis;
-    }
-
-    public long getSubmittedTimeMillis() {
-        return submittedTimeMillis;
-    }
-
-    public long getQueuedTimeMillis() {
-        return queuedTimeMillis;
-    }
-
-    public long getStartTimeMillis() {
-        return startTimeMillis;
-    }
-
-    public long getEndTimeMillis() {
-        return endTimeMillis;
-    }
-
-    public long getStateVersion() {
-        return stateVersion;
-    }
-
-    public ServerJobStatus getStatus() {
-        return status;
-    }
-
-    public boolean isCancellationRequested() {
-        return cancellationRequested;
-    }
-
-    public JobResult getResult() {
-        return result;
-    }
-
-    public Throwable getFailure() {
-        return failure;
-    }
-
-    public String getRunId() {
-        return runId;
-    }
-
-    public String getJobLogFile() {
-        return jobLogFile;
-    }
+    public String getJobId() { return jobId; }
+    public String getJobName() { return submission.getDefinition().getName(); }
+    public JobSubmission getSubmission() { return submission; }
+    public JobDefinition getDefinition() { return submission.getDefinition(); }
+    public long getCreateTimeMillis() { return createTimeMillis; }
+    public long getSubmittedTimeMillis() { return submittedTimeMillis; }
+    public long getQueuedTimeMillis() { return queuedTimeMillis; }
+    public long getStartTimeMillis() { return startTimeMillis; }
+    public long getEndTimeMillis() { return endTimeMillis; }
+    public long getStateVersion() { return stateVersion; }
+    public long getCheckpointVersion() { return checkpointVersion; }
+    public ServerJobStatus getStatus() { return status; }
+    public boolean isCancellationRequested() { return cancellationRequested; }
+    public JobResult getResult() { return result; }
+    public Throwable getFailure() { return failure; }
+    public String getRunId() { return runId; }
+    public String getJobLogFile() { return jobLogFile; }
 
     public synchronized List<JobStateTransition> getTransitions() {
         return Collections.unmodifiableList(
-                new ArrayList<JobStateTransition>(
-                        transitions));
+                new ArrayList<JobStateTransition>(transitions));
+    }
+
+    public synchronized List<JobExecutionAttempt> getAttempts() {
+        return Collections.unmodifiableList(
+                new ArrayList<JobExecutionAttempt>(attempts));
     }
 }

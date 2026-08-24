@@ -6,9 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Link-Up Server 启动参数。
- */
+/** Link-Up Server startup configuration. */
 public final class FluxServerConfig {
 
     public static final String DEFAULT_HOST = "0.0.0.0";
@@ -20,6 +18,7 @@ public final class FluxServerConfig {
     public static final long DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 10_000L;
     public static final String DEFAULT_NODE_ID = "link-up-node-1";
     public static final String DEFAULT_NODE_NAME = "Link-Up Offline Worker";
+    public static final String DEFAULT_STATE_DIRECTORY = "data/worker-state";
 
     private final String host;
     private final int port;
@@ -32,6 +31,7 @@ public final class FluxServerConfig {
     private final List<Path> pluginDirectories;
     private final String nodeId;
     private final String nodeName;
+    private final Path stateDirectory;
 
     public FluxServerConfig(
             String host,
@@ -55,7 +55,8 @@ public final class FluxServerConfig {
                 shutdownTimeoutMillis,
                 pluginDirectories,
                 DEFAULT_NODE_ID,
-                DEFAULT_NODE_NAME);
+                DEFAULT_NODE_NAME,
+                defaultStateDirectory());
     }
 
     public FluxServerConfig(
@@ -71,6 +72,35 @@ public final class FluxServerConfig {
             String nodeId,
             String nodeName) {
 
+        this(
+                host,
+                port,
+                jobThreads,
+                httpThreads,
+                maxQueuedJobs,
+                historyLimit,
+                maxRequestBytes,
+                shutdownTimeoutMillis,
+                pluginDirectories,
+                nodeId,
+                nodeName,
+                defaultStateDirectory());
+    }
+
+    public FluxServerConfig(
+            String host,
+            int port,
+            int jobThreads,
+            int httpThreads,
+            int maxQueuedJobs,
+            int historyLimit,
+            int maxRequestBytes,
+            long shutdownTimeoutMillis,
+            List<Path> pluginDirectories,
+            String nodeId,
+            String nodeName,
+            Path stateDirectory) {
+
         this.host = requireText(host, "host");
         this.port = requireRange(port, 1, 65535, "port");
         this.jobThreads = requireRange(jobThreads, 1, Integer.MAX_VALUE, "jobThreads");
@@ -83,24 +113,26 @@ public final class FluxServerConfig {
             throw new IllegalArgumentException(
                     "shutdownTimeoutMillis must not be negative");
         }
+        if (stateDirectory == null) {
+            throw new IllegalArgumentException(
+                    "stateDirectory must not be null");
+        }
 
         this.shutdownTimeoutMillis = shutdownTimeoutMillis;
-
         List<Path> directories =
                 pluginDirectories == null
                         ? Collections.<Path>emptyList()
                         : pluginDirectories;
-
-        this.pluginDirectories =
-                Collections.unmodifiableList(
-                        new ArrayList<Path>(directories));
+        this.pluginDirectories = Collections.unmodifiableList(
+                new ArrayList<Path>(directories));
         this.nodeId = requireText(nodeId, "nodeId");
         this.nodeName = requireText(nodeName, "nodeName");
+        this.stateDirectory =
+                stateDirectory.toAbsolutePath().normalize();
     }
 
     public static FluxServerConfig defaults() {
         int processors = Runtime.getRuntime().availableProcessors();
-
         return new FluxServerConfig(
                 DEFAULT_HOST,
                 DEFAULT_PORT,
@@ -112,7 +144,8 @@ public final class FluxServerConfig {
                 DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
                 Collections.<Path>emptyList(),
                 DEFAULT_NODE_ID,
-                DEFAULT_NODE_NAME);
+                DEFAULT_NODE_NAME,
+                defaultStateDirectory());
     }
 
     public static FluxServerConfig fromArgs(String[] args) {
@@ -128,12 +161,12 @@ public final class FluxServerConfig {
         long shutdownTimeout = defaults.getShutdownTimeoutMillis();
         String nodeId = defaults.getNodeId();
         String nodeName = defaults.getNodeName();
+        Path stateDirectory = defaults.getStateDirectory();
 
         List<Path> pluginDirectories = new ArrayList<Path>();
 
         for (int index = 0; index < args.length; index++) {
             String argument = args[index];
-
             if (argument == null || !argument.startsWith("--")) {
                 throw new IllegalArgumentException(
                         "Unknown argument: " + argument);
@@ -142,18 +175,15 @@ public final class FluxServerConfig {
             String option;
             String value;
             int equalIndex = argument.indexOf('=');
-
             if (equalIndex > 0) {
                 option = argument.substring(0, equalIndex);
                 value = argument.substring(equalIndex + 1);
             } else {
                 option = argument;
-
                 if (index + 1 >= args.length) {
                     throw new IllegalArgumentException(
                             "Missing value for " + option);
                 }
-
                 value = args[++index];
             }
 
@@ -179,6 +209,8 @@ public final class FluxServerConfig {
                 nodeId = value;
             } else if ("--node-name".equals(option)) {
                 nodeName = value;
+            } else if ("--state-dir".equals(option)) {
+                stateDirectory = path(option, value);
             } else {
                 throw new IllegalArgumentException(
                         "Unknown option: " + option);
@@ -196,23 +228,33 @@ public final class FluxServerConfig {
                 shutdownTimeout,
                 pluginDirectories,
                 nodeId,
-                nodeName);
+                nodeName,
+                stateDirectory);
+    }
+
+    private static Path defaultStateDirectory() {
+        return Paths.get(DEFAULT_STATE_DIRECTORY)
+                .toAbsolutePath()
+                .normalize();
+    }
+
+    private static Path path(String option, String value) {
+        String normalized = requireText(value, option);
+        return Paths.get(normalized)
+                .toAbsolutePath()
+                .normalize();
     }
 
     private static void addPluginDirectories(
             List<Path> directories,
             String value) {
-
         if (value == null || value.trim().isEmpty()) {
             throw new IllegalArgumentException(
                     "plugin directory must not be blank");
         }
-
         String[] paths = value.split(",");
-
         for (String path : paths) {
             String normalized = path.trim();
-
             if (!normalized.isEmpty()) {
                 directories.add(
                         Paths.get(normalized)
@@ -245,7 +287,6 @@ public final class FluxServerConfig {
             throw new IllegalArgumentException(
                     name + " must not be blank");
         }
-
         return value.trim();
     }
 
@@ -254,12 +295,10 @@ public final class FluxServerConfig {
             int minimum,
             int maximum,
             String name) {
-
         if (value < minimum || value > maximum) {
             throw new IllegalArgumentException(
                     name + " must be between " + minimum + " and " + maximum);
         }
-
         return value;
     }
 
@@ -274,4 +313,5 @@ public final class FluxServerConfig {
     public List<Path> getPluginDirectories() { return pluginDirectories; }
     public String getNodeId() { return nodeId; }
     public String getNodeName() { return nodeName; }
+    public Path getStateDirectory() { return stateDirectory; }
 }
