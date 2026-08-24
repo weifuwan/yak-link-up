@@ -1,7 +1,13 @@
-package com.link.up.server.runtime;
+package com.link.up.server.application.port;
+
+import com.link.up.server.runtime.JobExecutionMetadata;
+import com.link.up.server.runtime.JobSnapshot;
 
 import java.util.List;
 
+/**
+ * Application persistence port for terminal Worker read models.
+ */
 public interface JobRepository {
 
     void save(JobSnapshot snapshot);

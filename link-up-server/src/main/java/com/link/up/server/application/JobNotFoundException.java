@@ -1,4 +1,4 @@
-package com.link.up.server.runtime;
+package com.link.up.server.application;
 
 public final class JobNotFoundException
         extends RuntimeException {

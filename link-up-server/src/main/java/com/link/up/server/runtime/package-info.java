@@ -1,9 +1,11 @@
 /**
- * Local Worker runtime orchestration and job state management.
+ * Worker read-model and protocol compatibility types.
  *
- * <p>This package owns submission/idempotency, queue admission, runtime
- * invocation, repositories, and Worker job read models. It must remain free of
- * connector-specific behavior and must not expose framework task/channel
- * internals to HTTP adapters.
+ * <p>Control-plane orchestration no longer belongs here. Use
+ * {@code server.application} for use cases, {@code server.domain} for lifecycle
+ * rules/state, and {@code server.infrastructure} for local runtime adapters.
+ * JobSnapshot/JobExecutionMetadata and stable protocol value objects remain in
+ * this package in Phase 6 to avoid coupling the architecture refactor to REST
+ * wire-type churn.</p>
  */
 package com.link.up.server.runtime;

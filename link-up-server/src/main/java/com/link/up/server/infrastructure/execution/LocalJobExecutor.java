@@ -1,15 +1,16 @@
-package com.link.up.server.runtime;
+package com.link.up.server.infrastructure.execution;
 
 import com.link.up.framework.execution.JobExecutionListener;
 import com.link.up.framework.execution.LocalFluxEngine;
 import com.link.up.framework.job.JobDefinition;
 import com.link.up.framework.job.JobResult;
+import com.link.up.server.application.port.JobExecutor;
 
 import java.nio.file.Path;
 import java.util.Arrays;
 
 /**
- * 每个 Job 创建一个独立 LocalFluxEngine，避免多个作业共享 Connector 资源。
+ * Framework execution adapter. Each Worker job owns an isolated LocalFluxEngine.
  */
 public final class LocalJobExecutor
         implements JobExecutor {
@@ -35,6 +36,7 @@ public final class LocalJobExecutor
                         pluginDirectories.length);
     }
 
+    @Override
     public JobResult execute(
             JobDefinition definition,
             JobExecutionListener listener)
@@ -42,8 +44,7 @@ public final class LocalJobExecutor
 
         LocalFluxEngine engine =
                 pluginDirectories.length == 0
-                        ? LocalFluxEngine.create(
-                        classLoader)
+                        ? LocalFluxEngine.create(classLoader)
                         : LocalFluxEngine.create(
                         classLoader,
                         pluginDirectories);

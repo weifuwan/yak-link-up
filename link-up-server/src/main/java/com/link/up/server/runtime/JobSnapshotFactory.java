@@ -1,6 +1,6 @@
 package com.link.up.server.runtime;
 
-import com.link.up.framework.execution.JobExecution;
+import com.link.up.api.sink.TableDdl;
 import com.link.up.framework.execution.TaskId;
 import com.link.up.framework.execution.TaskType;
 import com.link.up.framework.job.CommitSummary;
@@ -9,6 +9,8 @@ import com.link.up.framework.job.PipelineResult;
 import com.link.up.framework.metrics.ChannelMetrics;
 import com.link.up.framework.metrics.JobMetrics;
 import com.link.up.framework.metrics.TaskMetrics;
+import com.link.up.server.domain.JobExecutionState;
+import com.link.up.server.domain.JobSubmission;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,63 +20,54 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 将可变运行时对象复制为 REST 安全快照。
+ * Copies control-plane state and framework metrics into REST-safe read models.
  */
-final class JobSnapshotFactory {
+public final class JobSnapshotFactory {
 
     private JobSnapshotFactory() {
     }
 
-    static JobSnapshot create(
-            JobExecutionHandle handle) {
+    public static JobSnapshot create(
+            JobExecutionState state,
+            JobMetrics liveMetrics) {
 
-        JobResult result =
-                handle.getResult();
-
+        JobResult result = state.getResult();
         JobMetrics jobMetrics =
-                resolveMetrics(
-                        handle,
-                        result);
+                result == null
+                        ? liveMetrics
+                        : result.getMetrics();
 
-        JobSnapshot.Metrics metrics =
-                metrics(jobMetrics);
-
+        JobSnapshot.Metrics metrics = metrics(jobMetrics);
         JobSnapshot.Commit commit =
                 commit(
                         result == null
                                 ? null
                                 : result.getCommitSummary());
-
         List<JobSnapshot.Pipeline> pipelines =
                 pipelines(
-                        handle,
+                        state,
                         result,
                         jobMetrics);
 
-        Throwable failure =
-                handle.getFailure();
-
+        Throwable failure = state.getFailure();
         if (failure == null
-                && handle.getStatus()
-                == ServerJobStatus.FAILED
+                && state.getStatus() == ServerJobStatus.FAILED
                 && result != null) {
             failure = result.getFailure();
         }
 
-        long endTimeMillis =
-                handle.getEndTimeMillis();
-
+        long endTimeMillis = state.getEndTimeMillis();
         long durationMillis =
                 duration(
-                        handle.getStartTimeMillis(),
+                        state.getStartTimeMillis(),
                         endTimeMillis);
 
         return new JobSnapshot(
-                handle.getJobId(),
-                handle.getJobName(),
-                handle.getStatus(),
-                handle.getCreateTimeMillis(),
-                handle.getStartTimeMillis(),
+                state.getJobId(),
+                state.getJobName(),
+                state.getStatus(),
+                state.getCreateTimeMillis(),
+                state.getStartTimeMillis(),
                 endTimeMillis,
                 durationMillis,
                 metrics,
@@ -88,46 +81,57 @@ final class JobSnapshotFactory {
                         : safeMessage(failure));
     }
 
-    private static JobMetrics resolveMetrics(
-            JobExecutionHandle handle,
-            JobResult result) {
+    public static JobExecutionMetadata metadata(
+            JobExecutionState state) {
+
+        Map<String, TableDdl> tableDdls =
+                new LinkedHashMap<String, TableDdl>();
+        JobResult result = state.getResult();
 
         if (result != null) {
-            return result.getMetrics();
+            for (PipelineResult pipelineResult :
+                    result.getPipelineResults()) {
+                if (pipelineResult.getTableDdl() != null) {
+                    tableDdls.put(
+                            pipelineResult.getPipelineId(),
+                            pipelineResult.getTableDdl());
+                }
+            }
         }
 
-        JobExecution execution =
-                handle.getExecution();
-
-        return execution == null
-                ? null
-                : execution.getMetrics();
+        JobSubmission submission = state.getSubmission();
+        return new JobExecutionMetadata(
+                submission.getExternalExecutionId(),
+                submission.getIdempotencyKey(),
+                submission.getDefinitionVersion(),
+                submission.getConfigDigest(),
+                state.getSubmittedTimeMillis(),
+                state.getQueuedTimeMillis(),
+                state.getStateVersion(),
+                state.isCancellationRequested(),
+                state.getTransitions(),
+                tableDdls,
+                state.getRunId(),
+                state.getJobLogFile());
     }
 
     private static List<JobSnapshot.Pipeline> pipelines(
-            JobExecutionHandle handle,
+            JobExecutionState state,
             JobResult result,
             JobMetrics metrics) {
 
-        Map<String, List<TaskMetrics>>
-                tasksByPipeline =
+        Map<String, List<TaskMetrics>> tasksByPipeline =
                 groupTasks(metrics);
-
         List<JobSnapshot.Pipeline> pipelines =
                 new ArrayList<JobSnapshot.Pipeline>();
 
         if (result != null
-                && !result.getPipelineResults()
-                .isEmpty()) {
-
+                && !result.getPipelineResults().isEmpty()) {
             for (PipelineResult pipelineResult :
                     result.getPipelineResults()) {
-
                 List<TaskMetrics> taskMetrics =
                         tasksByPipeline.remove(
-                                pipelineResult
-                                        .getPipelineId());
-
+                                pipelineResult.getPipelineId());
                 pipelines.add(
                         finalPipeline(
                                 pipelineResult,
@@ -136,25 +140,17 @@ final class JobSnapshotFactory {
             }
         }
 
-        /*
-         * 运行中尚未产生 PipelineResult 时，
-         * 根据 TaskId.pipelineId 生成实时 Pipeline。
-         */
         List<String> remainingPipelineIds =
                 new ArrayList<String>(
                         tasksByPipeline.keySet());
-
         Collections.sort(remainingPipelineIds);
 
-        for (String pipelineId :
-                remainingPipelineIds) {
-
+        for (String pipelineId : remainingPipelineIds) {
             pipelines.add(
                     livePipeline(
-                            handle,
+                            state,
                             pipelineId,
-                            tasksByPipeline.get(
-                                    pipelineId),
+                            tasksByPipeline.get(pipelineId),
                             metrics));
         }
 
@@ -168,12 +164,9 @@ final class JobSnapshotFactory {
 
         List<TaskMetrics> tasks =
                 taskMetrics == null
-                        ? Collections
-                        .<TaskMetrics>emptyList()
+                        ? Collections.<TaskMetrics>emptyList()
                         : taskMetrics;
-
-        CommitSummary summary =
-                result.getCommitSummary();
+        CommitSummary summary = result.getCommitSummary();
 
         return new JobSnapshot.Pipeline(
                 result.getPipelineId(),
@@ -197,54 +190,42 @@ final class JobSnapshotFactory {
                         jobMetrics),
                 result.getFailure() == null
                         ? null
-                        : safeMessage(
-                        result.getFailure()));
+                        : safeMessage(result.getFailure()));
     }
 
     private static JobSnapshot.Pipeline livePipeline(
-            JobExecutionHandle handle,
+            JobExecutionState state,
             String pipelineId,
             List<TaskMetrics> tasks,
             JobMetrics jobMetrics) {
 
         String sourceTable =
-                firstTable(
-                        tasks,
-                        TaskType.SOURCE);
-
+                firstTable(tasks, TaskType.SOURCE);
         String sinkTable =
-                firstTable(
-                        tasks,
-                        TaskType.SINK);
+                firstTable(tasks, TaskType.SINK);
 
         return new JobSnapshot.Pipeline(
                 pipelineId,
                 sourceTable,
-                handle.getStatus().name(),
+                state.getStatus().name(),
                 source(
-                        handle.getDefinition()
+                        state.getDefinition()
                                 .getSource()
                                 .getType(),
                         sourceTable,
-                        countTasks(
-                                tasks,
-                                TaskType.SOURCE),
+                        countTasks(tasks, TaskType.SOURCE),
                         tasks),
                 sink(
-                        handle.getDefinition()
+                        state.getDefinition()
                                 .getSink()
                                 .getType(),
                         sinkTable,
-                        countTasks(
-                                tasks,
-                                TaskType.SINK),
+                        countTasks(tasks, TaskType.SINK),
                         tasks,
                         null),
                 commit(null),
                 taskViews(tasks),
-                channelViews(
-                        pipelineId,
-                        jobMetrics),
+                channelViews(pipelineId, jobMetrics),
                 null);
     }
 
@@ -262,20 +243,14 @@ final class JobSnapshotFactory {
         long failedSplits = 0L;
 
         List<TaskMetrics> sourceTasks =
-                filterTasks(
-                        tasks,
-                        TaskType.SOURCE);
-
+                filterTasks(tasks, TaskType.SOURCE);
         for (TaskMetrics task : sourceTasks) {
             batches += task.getBatchCount();
-            records +=
-                    task.getSourceReadRecordCount();
+            records += task.getSourceReadRecordCount();
             bytes += task.getSourceReadBytes();
             totalSplits += task.getTotalSplitCount();
-            completedSplits +=
-                    task.getCompletedSplitCount();
-            failedSplits +=
-                    task.getFailedSplitCount();
+            completedSplits += task.getCompletedSplitCount();
+            failedSplits += task.getFailedSplitCount();
         }
 
         return new JobSnapshot.Source(
@@ -290,9 +265,7 @@ final class JobSnapshotFactory {
                 totalSplits,
                 completedSplits,
                 failedSplits,
-                qps(
-                        sourceTasks,
-                        TaskType.SOURCE));
+                qps(sourceTasks, TaskType.SOURCE));
     }
 
     private static JobSnapshot.Sink sink(
@@ -310,20 +283,13 @@ final class JobSnapshotFactory {
         long bytes = 0L;
 
         List<TaskMetrics> sinkTasks =
-                filterTasks(
-                        tasks,
-                        TaskType.SINK);
-
+                filterTasks(tasks, TaskType.SINK);
         for (TaskMetrics task : sinkTasks) {
-            receivedBatches +=
-                    task.getReceivedBatchCount();
-            attempted +=
-                    task.getAttemptedRecordCount();
-            success +=
-                    task.getSinkWriteSuccessRecordCount();
+            receivedBatches += task.getReceivedBatchCount();
+            attempted += task.getAttemptedRecordCount();
+            success += task.getSinkWriteSuccessRecordCount();
             failed += task.getFailedRecordCount();
-            unknown +=
-                    task.getUnknownStateRecordCount();
+            unknown += task.getUnknownStateRecordCount();
             bytes += task.getSinkWrittenBytes();
         }
 
@@ -343,9 +309,7 @@ final class JobSnapshotFactory {
                         ? 0L
                         : commitSummary
                         .getSuccessfullyCommittedRecordCount(),
-                qps(
-                        sinkTasks,
-                        TaskType.SINK));
+                qps(sinkTasks, TaskType.SINK));
     }
 
     private static double qps(
@@ -360,34 +324,26 @@ final class JobSnapshotFactory {
             if (task.getStartTimeMillis() <= 0L) {
                 continue;
             }
-
             records +=
                     type == TaskType.SOURCE
                             ? task.getSourceReadRecordCount()
                             : task.getSinkWriteSuccessRecordCount();
-
-            minimumStart =
-                    Math.min(
-                            minimumStart,
-                            task.getStartTimeMillis());
-
-            maximumEnd =
-                    Math.max(
-                            maximumEnd,
-                            task.getEndTimeMillis() > 0L
-                                    ? task.getEndTimeMillis()
-                                    : System.currentTimeMillis());
+            minimumStart = Math.min(
+                    minimumStart,
+                    task.getStartTimeMillis());
+            maximumEnd = Math.max(
+                    maximumEnd,
+                    task.getEndTimeMillis() > 0L
+                            ? task.getEndTimeMillis()
+                            : System.currentTimeMillis());
         }
 
         if (minimumStart == Long.MAX_VALUE) {
             return 0D;
         }
-
-        long duration =
-                Math.max(
-                        0L,
-                        maximumEnd - minimumStart);
-
+        long duration = Math.max(
+                0L,
+                maximumEnd - minimumStart);
         return duration == 0L
                 ? 0D
                 : records * 1000D / duration;
@@ -398,34 +354,21 @@ final class JobSnapshotFactory {
 
         Map<String, List<TaskMetrics>> grouped =
                 new LinkedHashMap<String, List<TaskMetrics>>();
-
         if (metrics == null) {
             return grouped;
         }
 
         for (Map.Entry<TaskId, TaskMetrics> entry :
-                metrics.getTaskMetrics()
-                        .entrySet()) {
-
+                metrics.getTaskMetrics().entrySet()) {
             String pipelineId =
-                    entry.getKey()
-                            .getPipelineId();
-
-            List<TaskMetrics> tasks =
-                    grouped.get(pipelineId);
-
+                    entry.getKey().getPipelineId();
+            List<TaskMetrics> tasks = grouped.get(pipelineId);
             if (tasks == null) {
-                tasks =
-                        new ArrayList<TaskMetrics>();
-
-                grouped.put(
-                        pipelineId,
-                        tasks);
+                tasks = new ArrayList<TaskMetrics>();
+                grouped.put(pipelineId, tasks);
             }
-
             tasks.add(entry.getValue());
         }
-
         return grouped;
     }
 
@@ -435,28 +378,21 @@ final class JobSnapshotFactory {
 
         List<TaskMetrics> result =
                 new ArrayList<TaskMetrics>();
-
         if (tasks == null) {
             return result;
         }
-
         for (TaskMetrics task : tasks) {
-            if (task.getTaskId()
-                    .getTaskType() == type) {
+            if (task.getTaskId().getTaskType() == type) {
                 result.add(task);
             }
         }
-
         return result;
     }
 
     private static int countTasks(
             List<TaskMetrics> tasks,
             TaskType type) {
-
-        return filterTasks(
-                tasks,
-                type).size();
+        return filterTasks(tasks, type).size();
     }
 
     private static String firstTable(
@@ -466,19 +402,13 @@ final class JobSnapshotFactory {
         if (tasks == null) {
             return "-";
         }
-
         for (TaskMetrics task : tasks) {
-            if (task.getTaskId()
-                    .getTaskType() == type
+            if (task.getTaskId().getTaskType() == type
                     && task.getCurrentTable() != null
-                    && !task.getCurrentTable()
-                    .trim()
-                    .isEmpty()) {
-
+                    && !task.getCurrentTable().trim().isEmpty()) {
                 return task.getCurrentTable();
             }
         }
-
         return "-";
     }
 
@@ -488,51 +418,40 @@ final class JobSnapshotFactory {
         List<TaskMetrics> ordered =
                 new ArrayList<TaskMetrics>(
                         tasks == null
-                                ? Collections
-                                .<TaskMetrics>emptyList()
+                                ? Collections.<TaskMetrics>emptyList()
                                 : tasks);
-
         Collections.sort(
                 ordered,
                 new Comparator<TaskMetrics>() {
+                    @Override
                     public int compare(
                             TaskMetrics left,
                             TaskMetrics right) {
-
                         int type =
                                 left.getTaskId()
                                         .getTaskType()
                                         .compareTo(
                                                 right.getTaskId()
                                                         .getTaskType());
-
                         if (type != 0) {
                             return type;
                         }
-
                         return Integer.compare(
-                                left.getTaskId()
-                                        .getSubtaskIndex(),
-                                right.getTaskId()
-                                        .getSubtaskIndex());
+                                left.getTaskId().getSubtaskIndex(),
+                                right.getTaskId().getSubtaskIndex());
                     }
                 });
 
         List<JobSnapshot.Task> result =
                 new ArrayList<JobSnapshot.Task>();
-
         for (TaskMetrics task : ordered) {
-            TaskId taskId =
-                    task.getTaskId();
-
+            TaskId taskId = task.getTaskId();
             result.add(
                     new JobSnapshot.Task(
                             taskId.toString(),
                             taskId.getPipelineId(),
-                            taskId.getTaskType()
-                                    .name(),
-                            task.getState()
-                                    .name(),
+                            taskId.getTaskType().name(),
+                            task.getState().name(),
                             taskId.getSubtaskIndex(),
                             taskId.getParallelism(),
                             task.getBatchCount(),
@@ -547,7 +466,6 @@ final class JobSnapshotFactory {
                             task.getCurrentTable(),
                             task.getCurrentSplit()));
         }
-
         return result;
     }
 
@@ -557,21 +475,16 @@ final class JobSnapshotFactory {
 
         List<JobSnapshot.Channel> result =
                 new ArrayList<JobSnapshot.Channel>();
-
         if (metrics == null) {
             return result;
         }
 
-        for (ChannelMetrics channel :
-                metrics.getChannelMetrics()) {
-
+        for (ChannelMetrics channel : metrics.getChannelMetrics()) {
             if (channel.getChannelId() == null
                     || !channel.getChannelId()
-                    .startsWith(
-                            pipelineId + "-")) {
+                    .startsWith(pipelineId + "-")) {
                 continue;
             }
-
             result.add(
                     new JobSnapshot.Channel(
                             channel.getChannelId(),
@@ -588,7 +501,6 @@ final class JobSnapshotFactory {
                             channel.getConsumerIdleRatio(),
                             channel.getRateLimitedRatio()));
         }
-
         return result;
     }
 
@@ -665,49 +577,29 @@ final class JobSnapshotFactory {
     private static long duration(
             long startTimeMillis,
             long endTimeMillis) {
-
         if (startTimeMillis <= 0L) {
             return 0L;
         }
-
         long end =
                 endTimeMillis > 0L
                         ? endTimeMillis
                         : System.currentTimeMillis();
-
-        return Math.max(
-                0L,
-                end - startTimeMillis);
+        return Math.max(0L, end - startTimeMillis);
     }
 
     private static String display(String value) {
-        return value == null
-                || value.trim().isEmpty()
+        return value == null || value.trim().isEmpty()
                 ? "-"
                 : value;
     }
 
     private static String safeMessage(
             Throwable failure) {
-
-        String message =
-                failure.getMessage();
-
-        if (message == null
-                || message.trim().isEmpty()) {
-            message =
-                    failure.getClass()
-                            .getSimpleName();
+        String message = failure.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            message = failure.getClass().getSimpleName();
         }
-
-        message =
-                message.replace(
-                        '\r',
-                        ' ')
-                        .replace(
-                                '\n',
-                                ' ');
-
+        message = message.replace('\r', ' ').replace('\n', ' ');
         return message.length() <= 500
                 ? message
                 : message.substring(0, 500);

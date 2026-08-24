@@ -1,9 +1,11 @@
-package com.link.up.server.runtime;
+package com.link.up.server.infrastructure.identity;
+
+import com.link.up.server.application.port.JobIdGenerator;
 
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 当前进程内唯一的 Job ID 生成器。
+ * Process-local job ID generator adapter.
  */
 public final class LocalJobIdGenerator
         implements JobIdGenerator {
@@ -11,6 +13,7 @@ public final class LocalJobIdGenerator
     private final AtomicLong sequence =
             new AtomicLong();
 
+    @Override
     public String nextId() {
         return "flux-"
                 + System.currentTimeMillis()

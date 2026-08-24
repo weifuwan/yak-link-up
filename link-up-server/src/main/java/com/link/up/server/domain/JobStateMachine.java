@@ -1,9 +1,11 @@
-package com.link.up.server.runtime;
+package com.link.up.server.domain;
+
+import com.link.up.server.runtime.ServerJobStatus;
 
 import java.util.EnumSet;
 
 /**
- * Link-Up 单节点离线作业状态机。
+ * Pure control-plane lifecycle rules for one offline job execution.
  */
 public final class JobStateMachine {
 
@@ -17,7 +19,6 @@ public final class JobStateMachine {
         if (from == null || to == null || from == to) {
             return false;
         }
-
         if (from.isTerminal()) {
             return false;
         }
