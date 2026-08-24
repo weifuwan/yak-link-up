@@ -2,13 +2,14 @@ package com.link.up.framework.execution;
 
 import com.link.up.api.dirtydata.DirtyDataSummary;
 import com.link.up.api.sink.CommitScope;
+import com.link.up.api.source.SourceSplit;
 import com.link.up.framework.job.CommitSummary;
 import com.link.up.framework.job.JobResult;
 import com.link.up.framework.job.JobStatus;
 import com.link.up.framework.job.PipelineResult;
 import com.link.up.framework.metrics.JobMetrics;
-import com.link.up.framework.planner.ExecutionPlan;
-import com.link.up.framework.planner.PipelinePlan;
+import com.link.up.framework.planner.JobGraph;
+import com.link.up.framework.planner.PipelineGraph;
 import org.apache.logging.log4j.CloseableThreadContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -25,80 +26,80 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Coordinates pipelines by completion order and retains every submitted outcome.
+ * Coordinates one runtime execution of an immutable JobGraph.
+ *
+ * <p>Mutable state is owned by {@link ExecutionGraph}; this class only drives
+ * pipeline execution and aggregates outcomes.
  */
 public final class JobExecution {
 
     private static final Logger LOG =
-            LogManager.getLogger(
-                    JobExecution.class);
+            LogManager.getLogger(JobExecution.class);
 
-    private final ExecutionPlan executionPlan;
+    private final ExecutionGraph executionGraph;
     private final ClassLoader classLoader;
-    private final long startTimeMillis;
-    private final String runId;
-    private final String jobLogFile;
-    private final CancellationToken cancellationToken =
-            new CancellationToken();
-    private final JobMetrics jobMetrics =
-            new JobMetrics();
 
     public JobExecution(
-            ExecutionPlan executionPlan,
+            JobGraph jobGraph,
             ClassLoader classLoader) {
 
         this(
-                executionPlan,
+                jobGraph,
                 classLoader,
-                LogIdentity.create(executionPlan));
+                LogIdentity.create(jobGraph));
     }
 
     private JobExecution(
-            ExecutionPlan executionPlan,
+            JobGraph jobGraph,
             ClassLoader classLoader,
             LogIdentity identity) {
 
         this(
-                executionPlan,
-                classLoader,
-                identity.startTimeMillis,
-                identity.runId,
-                identity.jobLogFile);
+                new ExecutionGraph(
+                        jobGraph,
+                        identity.startTimeMillis,
+                        identity.runId,
+                        identity.jobLogFile),
+                classLoader);
     }
 
     public JobExecution(
-            ExecutionPlan executionPlan,
+            JobGraph jobGraph,
             ClassLoader classLoader,
             long startTimeMillis,
             String runId,
             String jobLogFile) {
 
-        this.executionPlan =
-                Objects.requireNonNull(
-                        executionPlan,
-                        "executionPlan");
+        this(
+                new ExecutionGraph(
+                        jobGraph,
+                        startTimeMillis,
+                        runId,
+                        jobLogFile),
+                classLoader);
+    }
 
+    JobExecution(
+            ExecutionGraph executionGraph,
+            ClassLoader classLoader) {
+
+        this.executionGraph =
+                Objects.requireNonNull(
+                        executionGraph,
+                        "executionGraph must not be null");
         this.classLoader =
                 Objects.requireNonNull(
                         classLoader,
-                        "classLoader");
-
-        if (startTimeMillis < 0L) {
-            throw new IllegalArgumentException(
-                    "startTimeMillis must not be negative");
-        }
-
-        this.startTimeMillis = startTimeMillis;
-        this.runId = requireText(runId, "runId");
-        this.jobLogFile =
-                requireText(
-                        jobLogFile,
-                        "jobLogFile");
+                        "classLoader must not be null");
     }
 
     public JobResult execute() {
-        final String jobName =
-                executionPlan.getJobName();
+        JobGraph jobGraph = executionGraph.getJobGraph();
+        String jobName = jobGraph.getJobName();
+        String runId = executionGraph.getRunId();
+        String jobLogFile = executionGraph.getJobLogFile();
+
+        executionGraph.markRunning();
 
         try (CloseableThreadContext.Instance ignored =
                      openJobLogContext(
@@ -112,15 +113,10 @@ public final class JobExecution {
                     runId,
                     jobLogFile);
 
-            JobResult result =
-                    executeInternal(
-                            startTimeMillis,
-                            runId,
-                            jobLogFile);
+            JobResult result = executeInternal();
+            executionGraph.complete(result);
 
-            if (result.getStatus()
-                    == JobStatus.SUCCEEDED) {
-
+            if (result.getStatus() == JobStatus.SUCCEEDED) {
                 LOG.info(
                         "Job finished: status={}, durationMillis={}",
                         result.getStatus(),
@@ -139,43 +135,48 @@ public final class JobExecution {
             }
 
             return result;
+
+        } catch (RuntimeException failure) {
+            executionGraph.fail(failure);
+            throw failure;
+        } catch (Error failure) {
+            executionGraph.fail(failure);
+            throw failure;
         }
     }
 
-    private JobResult executeInternal(
-            long start,
-            final String currentRunId,
-            final String currentJobLogFile) {
+    private JobResult executeInternal() {
+        final JobGraph jobGraph = executionGraph.getJobGraph();
+        final CancellationToken cancellationToken =
+                executionGraph.getCancellationToken();
+        final JobMetrics jobMetrics = executionGraph.getMetrics();
+        final long start = executionGraph.getStartTimeMillis();
+        final String currentRunId = executionGraph.getRunId();
+        final String currentJobLogFile = executionGraph.getJobLogFile();
 
         List<PipelineResult> results =
                 new ArrayList<PipelineResult>();
-
         Throwable first = null;
 
-        if (!executionPlan.isEmpty()) {
-            int threadCount =
-                    Math.min(
-                            executionPlan
-                                    .getExecutionConfig()
-                                    .getPipelineParallelism(),
-                            executionPlan
-                                    .getPipelinePlans()
-                                    .size());
+        if (!jobGraph.isEmpty()) {
+            int threadCount = Math.min(
+                    jobGraph
+                            .getExecutionConfig()
+                            .getPipelineParallelism(),
+                    jobGraph
+                            .getPipelineGraphs()
+                            .size());
 
             ExecutorService pool =
-                    Executors.newFixedThreadPool(
-                            threadCount);
-
+                    Executors.newFixedThreadPool(threadCount);
             CompletionService<PipelineResult> completionService =
-                    new ExecutorCompletionService<PipelineResult>(
-                            pool);
-
+                    new ExecutorCompletionService<PipelineResult>(pool);
             List<Future<PipelineResult>> submitted =
                     new ArrayList<Future<PipelineResult>>();
 
             try {
-                for (final PipelinePlan pipelinePlan :
-                        executionPlan.getPipelinePlans()) {
+                for (final PipelineGraph<?> pipelineGraph :
+                        jobGraph.getPipelineGraphs()) {
 
                     submitted.add(
                             completionService.submit(
@@ -184,20 +185,14 @@ public final class JobExecution {
                                             try (CloseableThreadContext.Instance ignored =
                                                          openJobLogContext(
                                                                  currentRunId,
-                                                                 executionPlan.getJobName(),
+                                                                 jobGraph.getJobName(),
                                                                  currentJobLogFile)) {
-
-                                                return new PipelineExecution(
-                                                        pipelinePlan,
-                                                        executionPlan
-                                                                .getExecutionConfig(),
+                                                return executePipeline(
+                                                        pipelineGraph,
+                                                        jobGraph,
                                                         cancellationToken,
                                                         jobMetrics,
-                                                        classLoader,
-                                                        executionPlan
-                                                                .getJobName(),
-                                                        start)
-                                                        .execute();
+                                                        start);
                                             }
                                         }
                                     }));
@@ -206,21 +201,19 @@ public final class JobExecution {
                 for (int index = 0;
                      index < submitted.size();
                      index++) {
-
                     try {
                         PipelineResult result =
                                 completionService
                                         .take()
                                         .get();
-
                         results.add(result);
 
                         if (result.getFailure() != null
                                 && first == null) {
-
                             first = result.getFailure();
                             cancellationToken.cancel(first);
                         }
+
                     } catch (Exception exception) {
                         Throwable failure =
                                 exception instanceof ExecutionException
@@ -234,14 +227,13 @@ public final class JobExecution {
                         }
                     }
                 }
+
             } finally {
                 pool.shutdownNow();
             }
         }
 
-        CommitSummary summary =
-                merge(results);
-
+        CommitSummary summary = merge(results);
         JobStatus status =
                 first != null
                         ? JobStatus.FAILED
@@ -250,7 +242,7 @@ public final class JobExecution {
                         : JobStatus.SUCCEEDED;
 
         return new JobResult(
-                executionPlan.getJobName(),
+                jobGraph.getJobName(),
                 status,
                 start,
                 System.currentTimeMillis(),
@@ -261,25 +253,34 @@ public final class JobExecution {
                 results);
     }
 
-    private static CloseableThreadContext.Instance
-    openJobLogContext(
+    private <SplitT extends SourceSplit> PipelineResult executePipeline(
+            PipelineGraph<SplitT> pipelineGraph,
+            JobGraph jobGraph,
+            CancellationToken cancellationToken,
+            JobMetrics jobMetrics,
+            long start) {
+
+        return new PipelineExecution<SplitT>(
+                pipelineGraph,
+                jobGraph.getExecutionConfig(),
+                cancellationToken,
+                jobMetrics,
+                classLoader,
+                jobGraph.getJobName(),
+                start)
+                .execute();
+    }
+
+    private static CloseableThreadContext.Instance openJobLogContext(
             String currentRunId,
             String jobName,
             String currentJobLogFile) {
 
         return CloseableThreadContext
-                .put(
-                        "runId",
-                        currentRunId)
-                .put(
-                        "jobId",
-                        currentRunId)
-                .put(
-                        "jobName",
-                        jobName)
-                .put(
-                        "jobLogFile",
-                        currentJobLogFile);
+                .put("runId", currentRunId)
+                .put("jobId", currentRunId)
+                .put("jobName", jobName)
+                .put("jobLogFile", currentJobLogFile);
     }
 
     private CommitSummary merge(
@@ -297,8 +298,7 @@ public final class JobExecution {
         long unknown = 0L;
 
         for (PipelineResult result : results) {
-            CommitSummary summary =
-                    result.getCommitSummary();
+            CommitSummary summary = result.getCommitSummary();
 
             total += summary.getTotalTaskCount();
             finished += summary.getFinishedTaskCount();
@@ -328,48 +328,29 @@ public final class JobExecution {
     }
 
     public void cancel() {
-        cancellationToken.cancel(
+        executionGraph.requestCancellation(
                 new java.util.concurrent.CancellationException(
                         "Job was cancelled by caller"));
     }
 
-    /**
-     * 返回当前 Job 的实时指标。
-     *
-     * <p>JobMetrics 本身是线程安全的，调用方应将其转换为只读快照，
-     * 不应直接暴露给 HTTP 客户端。
-     */
     public JobMetrics getMetrics() {
-        return jobMetrics;
+        return executionGraph.getMetrics();
     }
 
     public String getRunId() {
-        return runId;
+        return executionGraph.getRunId();
     }
 
     public String getJobLogFile() {
-        return jobLogFile;
+        return executionGraph.getJobLogFile();
     }
 
-    /**
-     * 当前 Job 是否已经收到取消请求。
-     */
     public boolean isCancellationRequested() {
-        return cancellationToken.isCancelled();
+        return executionGraph.isCancellationRequested();
     }
 
-    private static String requireText(
-            String value,
-            String name) {
-
-        if (value == null
-                || value.trim().isEmpty()) {
-
-            throw new IllegalArgumentException(
-                    name + " must not be blank");
-        }
-
-        return value.trim();
+    public ExecutionGraph getExecutionGraph() {
+        return executionGraph;
     }
 
     private static final class LogIdentity {
@@ -381,24 +362,18 @@ public final class JobExecution {
                 long startTimeMillis,
                 String runId,
                 String jobLogFile) {
-
             this.startTimeMillis = startTimeMillis;
             this.runId = runId;
             this.jobLogFile = jobLogFile;
         }
 
-        private static LogIdentity create(
-                ExecutionPlan executionPlan) {
-
+        private static LogIdentity create(JobGraph jobGraph) {
             Objects.requireNonNull(
-                    executionPlan,
-                    "executionPlan");
+                    jobGraph,
+                    "jobGraph must not be null");
 
-            long start =
-                    System.currentTimeMillis();
-
-            String jobName =
-                    executionPlan.getJobName();
+            long start = System.currentTimeMillis();
+            String jobName = jobGraph.getJobName();
 
             return new LogIdentity(
                     start,

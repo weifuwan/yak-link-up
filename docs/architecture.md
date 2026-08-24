@@ -6,17 +6,17 @@ planning, and runtime roles, but Link-Up remains a small local batch synchroniza
 
 ## Goals
 
-Phase 1 establishes a stable architecture language without changing the core execution semantics:
+The architecture is evolving incrementally instead of through a full rewrite:
 
 - one canonical implementation for each framework role;
 - explicit module and package dependency direction;
-- clear model lifecycle from external job specification to runtime execution;
+- separate protocol, definition, physical-plan, runtime-state, and read-model lifecycles;
 - predictable naming for factories, planners, coordinators, executors, readers, writers, and repositories;
 - a repeatable connector package template;
-- removal of obsolete parallel execution paths that duplicate the active runtime.
+- no mutable runtime ownership inside planner models.
 
-This phase does not introduce distributed scheduling, remote task execution, checkpoints, failover, or a Flink-compatible
-API.
+Link-Up does not attempt to reproduce Flink's distributed scheduler, RPC stack, checkpoint subsystem, resource manager,
+or compatibility surface.
 
 ## Module boundaries
 
@@ -35,14 +35,12 @@ API.
 Owns stable contracts that connector authors may depend on: configuration, connector factories, source/sink contracts,
 table/catalog types, row types, errors, connector schema metadata, and the public `JobSpec` protocol.
 
-Allowed dependencies: general-purpose libraries required by the API itself.
-
 Forbidden dependencies: `link-up-framework`, `link-up-server`, `link-up-launcher`, and concrete connector modules.
 
 ### `link-up-framework`
 
-Owns local engine internals: connector discovery/preparation, job compilation, planning, channels, routing, execution,
-metrics, and connector classloader isolation.
+Owns local engine internals: connector discovery/preparation, job compilation, physical planning, channels, routing,
+execution state, task execution, metrics, and connector classloader isolation.
 
 It may depend on `link-up-api`. It must not import concrete connector implementations.
 
@@ -59,7 +57,8 @@ belongs to the engine must not be placed here merely because these modules own t
 
 ## Model lifecycle
 
-Link-Up uses different models for different lifecycle stages. Do not reuse a transport DTO as a runtime object.
+Link-Up uses different models for different lifecycle stages. A transport DTO, physical graph, runtime state, and API read
+model are intentionally different objects.
 
 ```text
 YAML / REST
@@ -73,25 +72,111 @@ JobDefinition                validated internal definition
     |
     | ConnectorPreparer
     v
-PreparedJob                  resolved factories, schemas and connector resources
+PreparedJob                  resolved connector/schema resources
     |
     | JobPlanner
     v
-ExecutionPlan                immutable physical plan (Phase 1 name)
+JobGraph                     immutable physical graph
     |
     | JobExecution
     v
-Task execution               SourceTask / SinkTask / Channel
+ExecutionGraph               mutable state for one run
     |
     v
-JobResult                    engine result
+PipelineExecution
+    |
+    v
+SourceTask / SinkTask / Channel
+    |
+    v
+JobResult                    terminal engine result
     |
     v
 JobSnapshot                  server-side read model
 ```
 
-`ExecutionPlan` is intentionally retained in Phase 1 to avoid a behavior-changing rename. A later phase may evolve this
-model into an explicit `JobGraph`/`ExecutionGraph` split once planner and runtime state are separated further.
+The core distinction is:
+
+- `JobGraph` answers **what should be executed**;
+- `ExecutionGraph` answers **what is happening in this run**.
+
+See [ADR-0002](adr/0002-jobgraph-executiongraph.md) for the decision and consequences.
+
+## Physical planning
+
+### `JobGraph`
+
+`JobGraph` is the immutable top-level physical plan. It owns the job name, execution configuration, and a list of
+`PipelineGraph` objects. It contains no cancellation token, executor, channel, runtime metrics, or status.
+
+### `PipelineGraph`
+
+A `PipelineGraph` is the physical execution boundary for one logical data set. It owns:
+
+- `pipelineId` and `dataSetId`;
+- the output catalog table;
+- source task plans;
+- sink task plans;
+- immutable source splits represented by the pipeline;
+- the split-assignment mode.
+
+The graph records the selected policy but does not instantiate a mutable split queue.
+
+### `SourceTaskPlan` / `SinkTaskPlan`
+
+Task plans describe inputs required to construct executable tasks. Runtime ownership objects do not belong here.
+In particular, `SourceTaskPlan` must never store `SplitProvider`, `LocalSplitQueue`, cancellation tokens, metrics, or
+channels.
+
+## Runtime execution state
+
+### `ExecutionGraph`
+
+Every invocation of a `JobGraph` gets a distinct `ExecutionGraph`. It owns:
+
+- `JobStatus` for the runtime execution;
+- run/log identity;
+- execution timestamps;
+- `CancellationToken`;
+- `JobMetrics`;
+- failure and terminal `JobResult`.
+
+The object is intentionally small. It is the state root that future scheduling, recovery, or read-only runtime snapshots
+should extend rather than adding more mutable state to `JobGraph` or `JobExecution`.
+
+### `JobExecution`
+
+`JobExecution` is the local coordinator for one `ExecutionGraph`. It:
+
+- marks the execution lifecycle;
+- starts pipeline executions with the configured pipeline parallelism;
+- propagates cancellation after the first failure;
+- aggregates pipeline outcomes into `JobResult`.
+
+It does not compile `JobSpec`, prepare connectors, or mutate the physical graph.
+
+### `PipelineExecution`
+
+`PipelineExecution` materializes runtime-only resources for one `PipelineGraph`: channels, runtime tasks, task executor,
+and, for dynamic assignment, the shared `LocalSplitQueue`.
+
+For dynamic split assignment:
+
+```text
+PipelineGraph
+  sourceSplits + DYNAMIC
+          |
+          v
+PipelineExecution
+          |
+          +--> LocalSplitQueue        runtime ownership
+          |
+          +--> SourceTask #0 ---------+
+          +--> SourceTask #1 ---------+ shared provider
+          +--> SourceTask #N ---------+
+```
+
+For static assignment, each `SourceTask` consumes the immutable split list already present in its `SourceTaskPlan`.
 
 ## Framework package roles
 
@@ -111,27 +196,34 @@ This package must not create threads, open connector resources, or perform task 
 
 ### `framework.planner`
 
-Transforms prepared input into an immutable physical execution plan. Planner code may calculate split assignment,
-parallelism, pipeline topology, and task plans.
+Transforms prepared input into immutable `JobGraph` / `PipelineGraph` physical models. Planner code may calculate split
+assignment, parallelism, pipeline topology, and task plans.
 
-Planner code must not start tasks, create executor services, or write data.
+Planner code must not:
+
+- create threads or executor services;
+- create channels;
+- create `SplitProvider` / `LocalSplitQueue`;
+- own cancellation or runtime metrics;
+- execute source/sink I/O.
 
 ### `framework.execution`
 
-Owns runtime lifecycle, cancellation, coordination, task execution, and execution state. Concrete executable tasks belong
-under `framework.execution.task`.
+Owns runtime lifecycle, `ExecutionGraph`, cancellation, coordination, runtime resource materialization, and task execution.
+Concrete executable tasks belong under `framework.execution.task`.
 
 The active execution path is:
 
 ```text
 JobExecution
+  -> ExecutionGraph
   -> PipelineExecution
      -> ExecutionCoordinator
         -> TaskExecutor
            -> execution.task.SourceTask / execution.task.SinkTask
 ```
 
-Do not add a second source/sink execution pipeline alongside this path.
+Do not add a second source/sink execution pipeline beside this path.
 
 ### `framework.channel` and `framework.routing`
 
@@ -139,7 +231,7 @@ Own data transport between tasks and channel selection. They do not discover con
 
 ### `framework.metrics`
 
-Own runtime measurements only. Metrics must observe execution; they must not become a control plane or scheduler.
+Own runtime measurements only. Metrics observe execution; they must not become a planner or scheduler.
 
 ### `framework.classloading`
 
@@ -154,7 +246,8 @@ Use role names consistently. A suffix is a contract, not decoration.
 | `Factory` | Construct an extension-facing component from validated configuration. |
 | `Registry` | Discover/index implementations and resolve them by stable identifier. |
 | `Compiler` | Translate one model/protocol into another normalized model. |
-| `Planner` | Produce an immutable execution plan without executing it. |
+| `Planner` | Produce an immutable physical graph without executing it. |
+| `Graph` | Describe a topology or state root for one lifecycle stage. Name the stage explicitly (`JobGraph`, `ExecutionGraph`). |
 | `Coordinator` | Coordinate lifecycle and outcomes across multiple runtime actors. |
 | `Scheduler` | Decide when/where executable work should run. Add only when this responsibility exists. |
 | `Executor` | Execute already-planned work. |
@@ -165,12 +258,11 @@ Use role names consistently. A suffix is a contract, not decoration.
 | `Gateway` | Cross a process/system boundary behind a narrow interface. |
 | `Manager` | Reserved for a true top-level lifecycle owner; prefer a more precise role when possible. |
 
-Avoid catch-all names such as `Common`, `Helper`, `Misc`, and generic `Utils` when a domain role can be named. Existing
-legacy packages may be migrated incrementally, but new code should use role-specific packages.
+Avoid catch-all names such as `Common`, `Helper`, `Misc`, and generic `Utils` when a domain role can be named.
 
 ## Source roles
 
-The API already exposes the core Flink-inspired concepts:
+The API exposes the core Flink-inspired concepts:
 
 ```text
 Source
@@ -179,18 +271,19 @@ Source
   -> SourceSplitEnumerator
 ```
 
-In Phase 1 the planner still calls `Source#createSplits(...)` for compatibility. `SourceSplitEnumerator` is therefore a
-contract whose runtime integration is not yet complete. A later phase should make split enumeration/coordinator
-ownership explicit instead of placing split discovery inside `JobPlanner`.
+The physical/runtime split is now explicit, but split discovery is still transitional: `JobPlanner` invokes
+`Source#createSplits(...)` during preparation/planning for compatibility. A later phase should make
+`SourceSplitEnumerator` / source coordination the standard split-discovery role.
 
-Do not add another split abstraction in the framework to work around this transition.
+Do not add another split abstraction to work around this transition.
 
 ## Server boundary
 
 `link-up-server` is the local Worker control plane. It owns HTTP adaptation, submission/idempotency, queue admission,
-worker identity, job status/read models, and runtime invocation. It must not implement connector-specific behavior.
+worker identity, server job status/read models, and runtime invocation. It must not implement connector-specific
+behavior.
 
-The desired direction is:
+The desired direction remains:
 
 ```text
 HTTP adapter
@@ -199,8 +292,8 @@ HTTP adapter
           -> runtime/repository ports
 ```
 
-Phase 1 documents this direction without forcing a large package migration. Server package restructuring belongs to a
-later behavior-preserving step.
+`ExecutionGraph` is framework runtime state; `JobSnapshot` remains the server read model. The server must not expose the
+mutable graph object directly to HTTP clients.
 
 ## Dependency rules for reviews
 
@@ -209,28 +302,36 @@ Reject a change when it introduces any of the following without an explicit arch
 1. a connector importing `com.link.up.framework.*`;
 2. framework code importing a concrete connector package;
 3. transport DTOs being used as mutable runtime state;
-4. planner code creating threads or performing I/O that belongs to readers/writers;
-5. a second `FactoryRegistry`, task hierarchy, or source execution path;
-6. a generic `common`, `core`, `helper`, or `utils` package used as a dumping ground;
-7. server HTTP code manipulating task/channel internals directly.
+4. planner code creating threads, channels, split queues, cancellation tokens, or runtime metrics;
+5. `SourceTaskPlan`, `PipelineGraph`, or `JobGraph` holding `SplitProvider` or other mutable execution ownership;
+6. a second `FactoryRegistry`, task hierarchy, or source execution path;
+7. a generic `common`, `core`, `helper`, or `utils` package used as a dumping ground;
+8. server HTTP code manipulating task/channel internals directly.
 
-## Phase 1 cleanup
+## Completed architecture phases
 
-The Phase 1 refactor removes obsolete framework internals that duplicated the active runtime:
+### Phase 1: role and package baseline
 
-- the old `framework.plugin.FactoryRegistry` in favor of `framework.connector.FactoryRegistry`;
-- the legacy `framework.factory.PreparedSource` branch;
-- the legacy `execution.source.*` processor/task path and `execution.sink.SinkExecuteProcessor`;
-- placeholder `Test` source files.
+- established Flink-inspired runtime vocabulary;
+- documented module/package dependency direction;
+- removed duplicate registry and legacy execution paths;
+- standardized connector development guidance.
 
-Round-robin split assignment remains covered through the active `planner.SplitAssigner` implementation.
+### Phase 2: physical graph and runtime state
+
+- replace transitional `ExecutionPlan` with `JobGraph`;
+- replace `PipelinePlan` with `PipelineGraph`;
+- introduce `ExecutionGraph` as mutable state for one run;
+- remove `SplitProvider` from planner task models;
+- move `LocalSplitQueue` creation into `PipelineExecution`;
+- keep static/dynamic split semantics and external protocols unchanged.
 
 ## Next architecture steps
 
-The next phases should be incremental:
+The next phases should remain incremental:
 
-1. make the plan model explicit (`JobDefinition -> JobGraph/ExecutionPlan -> runtime execution state`);
-2. separate coordinator/scheduler/executor responsibilities where current classes own multiple lifecycle stages;
-3. integrate `SourceSplitEnumerator` as the standard split discovery role;
-4. migrate connector package layouts toward the connector development template;
+1. separate coordinator/scheduler/executor responsibilities where current classes still own multiple lifecycle stages;
+2. integrate `SourceSplitEnumerator` as the standard split-discovery/coordinator role;
+3. migrate connector package layouts toward the connector development template as connectors are touched;
+4. improve server application/domain/adapter boundaries without coupling them to execution internals;
 5. split Maven modules only if package boundaries prove insufficient.

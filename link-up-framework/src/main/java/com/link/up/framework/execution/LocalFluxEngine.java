@@ -5,7 +5,7 @@ import com.link.up.framework.connector.FactoryRegistry;
 import com.link.up.framework.connector.PreparedJob;
 import com.link.up.framework.job.JobDefinition;
 import com.link.up.framework.job.JobResult;
-import com.link.up.framework.planner.ExecutionPlan;
+import com.link.up.framework.planner.JobGraph;
 import com.link.up.framework.planner.JobPlanner;
 import org.apache.logging.log4j.CloseableThreadContext;
 import org.apache.logging.log4j.LogManager;
@@ -15,28 +15,28 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * 本地离线 Flux 执行引擎。
+ * Local offline Link-Up execution engine.
  */
 public final class LocalFluxEngine
         implements FluxEngine {
 
     private static final Logger LOG =
-            LogManager.getLogger(
-                    LocalFluxEngine.class);
+            LogManager.getLogger(LocalFluxEngine.class);
 
     private final ClassLoader classLoader;
-
     private final ConnectorPreparer connectorPreparer;
-
     private final JobPlanner jobPlanner;
-
     private final FactoryRegistry registry;
 
     public LocalFluxEngine(
             ClassLoader classLoader,
             ConnectorPreparer connectorPreparer,
             JobPlanner jobPlanner) {
-        this(classLoader, connectorPreparer, jobPlanner, null);
+        this(
+                classLoader,
+                connectorPreparer,
+                jobPlanner,
+                null);
     }
 
     private LocalFluxEngine(
@@ -45,20 +45,15 @@ public final class LocalFluxEngine
             JobPlanner jobPlanner,
             FactoryRegistry registry) {
 
-        this.classLoader =
-                Objects.requireNonNull(
-                        classLoader,
-                        "classLoader must not be null");
-
-        this.connectorPreparer =
-                Objects.requireNonNull(
-                        connectorPreparer,
-                        "connectorPreparer must not be null");
-
-        this.jobPlanner =
-                Objects.requireNonNull(
-                        jobPlanner,
-                        "jobPlanner must not be null");
+        this.classLoader = Objects.requireNonNull(
+                classLoader,
+                "classLoader must not be null");
+        this.connectorPreparer = Objects.requireNonNull(
+                connectorPreparer,
+                "connectorPreparer must not be null");
+        this.jobPlanner = Objects.requireNonNull(
+                jobPlanner,
+                "jobPlanner must not be null");
         this.registry = registry;
     }
 
@@ -68,20 +63,17 @@ public final class LocalFluxEngine
         ClassLoader effectiveClassLoader =
                 classLoader == null
                         ? Thread.currentThread()
-                        .getContextClassLoader()
+                                .getContextClassLoader()
                         : classLoader;
 
         FactoryRegistry registry =
                 FactoryRegistry.discover(
                         effectiveClassLoader);
-
         ConnectorPreparer preparer =
                 new ConnectorPreparer(
                         registry,
                         effectiveClassLoader);
-
-        JobPlanner planner =
-                new JobPlanner();
+        JobPlanner planner = new JobPlanner();
 
         return new LocalFluxEngine(
                 effectiveClassLoader,
@@ -97,7 +89,7 @@ public final class LocalFluxEngine
         ClassLoader effectiveClassLoader =
                 classLoader == null
                         ? Thread.currentThread()
-                        .getContextClassLoader()
+                                .getContextClassLoader()
                         : classLoader;
 
         FactoryRegistry registry =
@@ -118,12 +110,12 @@ public final class LocalFluxEngine
     public JobResult execute(
             JobDefinition definition)
             throws Exception {
-
         return execute(definition, null);
     }
 
     /**
-     * 为本地服务暴露正在执行的实例，以便取消请求能传递到引擎。
+     * Exposes the active JobExecution to the local server so cancellation can
+     * be propagated after planning and before/during task execution.
      */
     public JobResult execute(
             JobDefinition definition,
@@ -136,12 +128,10 @@ public final class LocalFluxEngine
 
         long logIdentityTimeMillis =
                 System.currentTimeMillis();
-
         String runId =
                 JobLogFileName.createJobId(
                         definition.getName(),
                         logIdentityTimeMillis);
-
         String jobLogFile =
                 JobLogFileName.create(
                         definition.getName(),
@@ -166,16 +156,11 @@ public final class LocalFluxEngine
                     runId);
 
             PreparedJob preparedJob;
-            ExecutionPlan executionPlan;
+            JobGraph jobGraph;
 
             try {
-                preparedJob =
-                        connectorPreparer.prepare(
-                                definition);
-
-                executionPlan =
-                        jobPlanner.plan(
-                                preparedJob);
+                preparedJob = connectorPreparer.prepare(definition);
+                jobGraph = jobPlanner.plan(preparedJob);
             } catch (Exception failure) {
                 LOG.error(
                         "Job preparation failed: jobName={}, runId={}",
@@ -194,20 +179,19 @@ public final class LocalFluxEngine
 
             JobExecution jobExecution =
                     new JobExecution(
-                            executionPlan,
+                            jobGraph,
                             classLoader,
                             System.currentTimeMillis(),
                             runId,
                             jobLogFile);
 
             if (listener != null) {
-                listener.onJobExecutionCreated(
-                        jobExecution);
+                listener.onJobExecutionCreated(jobExecution);
             }
 
             return jobExecution.execute();
+
         } finally {
-            // Plugin loaders are job resources; no open jar remains after a job completes or fails.
             if (registry != null) {
                 registry.close();
             }
@@ -219,9 +203,5 @@ public final class LocalFluxEngine
         if (registry != null) {
             registry.close();
         }
-        /*
-         * 当前 Engine 不持有长生命周期线程池。
-         * 后续支持多 Job 并发时，可在这里关闭资源。
-         */
     }
 }
