@@ -2,10 +2,15 @@ package com.link.up.api.configuration.util;
 
 import com.link.up.api.configuration.Option;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * 配置项规则。
+ * Immutable connector option rules and the public builder DSL used by
+ * connector factories.
  */
 public final class OptionRule {
 
@@ -20,25 +25,10 @@ public final class OptionRule {
             List<ConditionRule> conditionRules,
             List<Condition<?>> valueConstraints) {
 
-        this.optionalOptions =
-                Collections.unmodifiableList(
-                        new ArrayList<>(optionalOptions)
-                );
-
-        this.requiredOptions =
-                Collections.unmodifiableList(
-                        new ArrayList<>(requiredOptions)
-                );
-
-        this.conditionRules =
-                Collections.unmodifiableList(
-                        new ArrayList<>(conditionRules)
-                );
-
-        this.valueConstraints =
-                Collections.unmodifiableList(
-                        new ArrayList<>(valueConstraints)
-                );
+        this.optionalOptions = immutableCopy(optionalOptions);
+        this.requiredOptions = immutableCopy(requiredOptions);
+        this.conditionRules = immutableCopy(conditionRules);
+        this.valueConstraints = immutableCopy(valueConstraints);
     }
 
     public static Builder builder() {
@@ -93,63 +83,37 @@ public final class OptionRule {
                 valueConstraints);
     }
 
+    private static <T> List<T> immutableCopy(List<T> values) {
+        Objects.requireNonNull(values, "values");
+        return Collections.unmodifiableList(
+                new ArrayList<T>(values));
+    }
+
     public static final class Builder {
 
         private final List<Option<?>> optionalOptions =
-                new ArrayList<>();
+                new ArrayList<Option<?>>();
 
         private final List<RequiredOption> requiredOptions =
-                new ArrayList<>();
+                new ArrayList<RequiredOption>();
 
         private final List<ConditionRule> conditionRules =
-                new ArrayList<>();
+                new ArrayList<ConditionRule>();
 
         private final List<Condition<?>> valueConstraints =
-                new ArrayList<>();
+                new ArrayList<Condition<?>>();
 
         private Builder() {
         }
 
-        private static <T> List<T> merge(
-                List<T> first,
-                List<T> second) {
-
-            List<T> result =
-                    new ArrayList<>(first);
-
-            result.addAll(second);
-            return result;
-        }
-
-        private static void requireOptions(
-                Option<?>[] options) {
-
-            if (options == null
-                    || options.length == 0) {
-                throw new OptionValidationException(
-                        "Options must not be empty");
-            }
-
-            for (Option<?> option : options) {
-                Objects.requireNonNull(
-                        option,
-                        "option");
-            }
-        }
-
-        private static OptionValidationException duplicate(
-                Option<?> option) {
-
-            return new OptionValidationException(
-                    "Option '%s' is declared repeatedly",
-                    option.key());
-        }
-
         public Builder optional(Option<?>... options) {
-            requireOptions(options);
+            OptionRuleBuilderSupport.requireOptions(options);
 
             for (Option<?> option : options) {
-                verifyOptionalDuplicate(option);
+                OptionRuleBuilderSupport.verifyOptionalDuplicate(
+                        option,
+                        optionalOptions,
+                        requiredOptions);
                 optionalOptions.add(option);
             }
 
@@ -157,20 +121,22 @@ public final class OptionRule {
         }
 
         public Builder required(Option<?>... options) {
-            requireOptions(options);
+            OptionRuleBuilderSupport.requireOptions(options);
 
             RequiredOption required =
-                    RequiredOption
-                            .AbsolutelyRequiredOptions
-                            .of(options);
+                    RequiredOption.AbsolutelyRequiredOptions.of(
+                            options);
 
-            verifyStructuralDuplicate(required);
+            OptionRuleBuilderSupport.verifyStructuralDuplicate(
+                    required,
+                    optionalOptions,
+                    requiredOptions);
             requiredOptions.add(required);
             return this;
         }
 
         public Builder exclusive(Option<?>... options) {
-            requireOptions(options);
+            OptionRuleBuilderSupport.requireOptions(options);
 
             if (options.length < 2) {
                 throw new OptionValidationException(
@@ -178,17 +144,19 @@ public final class OptionRule {
             }
 
             RequiredOption required =
-                    RequiredOption
-                            .ExclusiveRequiredOptions
-                            .of(options);
+                    RequiredOption.ExclusiveRequiredOptions.of(
+                            options);
 
-            verifyStructuralDuplicate(required);
+            OptionRuleBuilderSupport.verifyStructuralDuplicate(
+                    required,
+                    optionalOptions,
+                    requiredOptions);
             requiredOptions.add(required);
             return this;
         }
 
         public Builder bundled(Option<?>... options) {
-            requireOptions(options);
+            OptionRuleBuilderSupport.requireOptions(options);
 
             if (options.length < 2) {
                 throw new OptionValidationException(
@@ -196,11 +164,13 @@ public final class OptionRule {
             }
 
             RequiredOption required =
-                    RequiredOption
-                            .BundledRequiredOptions
-                            .of(options);
+                    RequiredOption.BundledRequiredOptions.of(
+                            options);
 
-            verifyStructuralDuplicate(required);
+            OptionRuleBuilderSupport.verifyStructuralDuplicate(
+                    required,
+                    optionalOptions,
+                    requiredOptions);
             requiredOptions.add(required);
             return this;
         }
@@ -211,7 +181,6 @@ public final class OptionRule {
                 Option<?>... required) {
 
             verifyConditionalExists(conditionOption);
-
             return requiredWhen(
                     Condition.of(
                             conditionOption,
@@ -225,30 +194,11 @@ public final class OptionRule {
                 Option<?>... required) {
 
             verifyConditionalExists(conditionOption);
-
-            if (expectedValues == null
-                    || expectedValues.isEmpty()) {
-                throw new OptionValidationException(
-                        "Conditional values must not be empty");
-            }
-
-            Condition<T> condition = null;
-
-            for (T value : expectedValues) {
-                if (condition == null) {
-                    condition =
-                            Condition.of(
-                                    conditionOption,
-                                    value);
-                } else {
-                    condition.or(
-                            Condition.of(
-                                    conditionOption,
-                                    value));
-                }
-            }
-
-            return requiredWhen(condition, required);
+            return requiredWhen(
+                    OptionRuleBuilderSupport.anyOf(
+                            conditionOption,
+                            expectedValues),
+                    required);
         }
 
         public Builder requiredWhen(
@@ -256,16 +206,16 @@ public final class OptionRule {
                 Option<?>... required) {
 
             Objects.requireNonNull(condition, "condition");
-            requireOptions(required);
+            OptionRuleBuilderSupport.requireOptions(required);
 
-            verifyConditionalTarget(required);
+            OptionRuleBuilderSupport.verifyConditionalTarget(
+                    required,
+                    requiredOptions);
 
             RequiredOption conditional =
-                    RequiredOption
-                            .ConditionalRequiredOptions
-                            .of(
-                                    condition,
-                                    Arrays.asList(required));
+                    RequiredOption.ConditionalRequiredOptions.of(
+                            condition,
+                            Arrays.asList(required));
 
             requiredOptions.add(conditional);
             return this;
@@ -277,7 +227,6 @@ public final class OptionRule {
                 OptionRule rule) {
 
             verifyConditionalExists(conditionOption);
-
             return ruleWhen(
                     Condition.of(
                             conditionOption,
@@ -291,30 +240,11 @@ public final class OptionRule {
                 OptionRule rule) {
 
             verifyConditionalExists(conditionOption);
-
-            if (expectedValues == null
-                    || expectedValues.isEmpty()) {
-                throw new OptionValidationException(
-                        "Conditional values must not be empty");
-            }
-
-            Condition<T> condition = null;
-
-            for (T value : expectedValues) {
-                if (condition == null) {
-                    condition =
-                            Condition.of(
-                                    conditionOption,
-                                    value);
-                } else {
-                    condition.or(
-                            Condition.of(
-                                    conditionOption,
-                                    value));
-                }
-            }
-
-            return ruleWhen(condition, rule);
+            return ruleWhen(
+                    OptionRuleBuilderSupport.anyOf(
+                            conditionOption,
+                            expectedValues),
+                    rule);
         }
 
         public Builder ruleWhen(
@@ -342,7 +272,6 @@ public final class OptionRule {
             addConstraints(
                     firstCondition,
                     otherConditions);
-
             return this;
         }
 
@@ -355,11 +284,9 @@ public final class OptionRule {
             required(
                     firstOption,
                     secondOption);
-
             addConstraints(
                     firstCondition,
                     otherConditions);
-
             return this;
         }
 
@@ -372,7 +299,6 @@ public final class OptionRule {
             addConstraints(
                     firstCondition,
                     otherConditions);
-
             return this;
         }
 
@@ -385,11 +311,9 @@ public final class OptionRule {
             optional(
                     firstOption,
                     secondOption);
-
             addConstraints(
                     firstCondition,
                     otherConditions);
-
             return this;
         }
 
@@ -400,7 +324,6 @@ public final class OptionRule {
                 Condition<?>... otherConditions) {
 
             verifyConditionalExists(conditionOption);
-
             return constraintsWhen(
                     Condition.of(
                             conditionOption,
@@ -417,7 +340,7 @@ public final class OptionRule {
             Objects.requireNonNull(trigger, "trigger");
 
             List<Condition<?>> constraints =
-                    new ArrayList<>();
+                    new ArrayList<Condition<?>>();
 
             constraints.add(
                     Objects.requireNonNull(
@@ -432,9 +355,9 @@ public final class OptionRule {
 
             OptionRule rule =
                     new OptionRule(
-                            Collections.emptyList(),
-                            Collections.emptyList(),
-                            Collections.emptyList(),
+                            Collections.<Option<?>>emptyList(),
+                            Collections.<RequiredOption>emptyList(),
+                            Collections.<ConditionRule>emptyList(),
                             constraints);
 
             mergeConditionRule(trigger, rule);
@@ -469,15 +392,14 @@ public final class OptionRule {
                 Condition<?> condition,
                 OptionRule newRule) {
 
-            for (int i = 0;
-                 i < conditionRules.size();
-                 i++) {
+            for (int index = 0;
+                 index < conditionRules.size();
+                 index++) {
 
                 ConditionRule current =
-                        conditionRules.get(i);
+                        conditionRules.get(index);
 
-                if (!current.getCondition()
-                        .equals(condition)) {
+                if (!current.getCondition().equals(condition)) {
                     continue;
                 }
 
@@ -486,21 +408,21 @@ public final class OptionRule {
 
                 OptionRule merged =
                         new OptionRule(
-                                merge(
+                                OptionRuleBuilderSupport.merge(
                                         oldRule.optionalOptions,
                                         newRule.optionalOptions),
-                                merge(
+                                OptionRuleBuilderSupport.merge(
                                         oldRule.requiredOptions,
                                         newRule.requiredOptions),
-                                merge(
+                                OptionRuleBuilderSupport.merge(
                                         oldRule.conditionRules,
                                         newRule.conditionRules),
-                                merge(
+                                OptionRuleBuilderSupport.merge(
                                         oldRule.valueConstraints,
                                         newRule.valueConstraints));
 
                 conditionRules.set(
-                        i,
+                        index,
                         new ConditionRule(
                                 condition,
                                 merged));
@@ -513,90 +435,13 @@ public final class OptionRule {
                             newRule));
         }
 
-        private void verifyOptionalDuplicate(
-                Option<?> option) {
-
-            if (optionalOptions.contains(option)) {
-                throw duplicate(option);
-            }
-
-            for (RequiredOption required :
-                    requiredOptions) {
-                if (required
-                        instanceof
-                        RequiredOption
-                                .ConditionalRequiredOptions) {
-                    continue;
-                }
-
-                if (required.getOptions()
-                        .contains(option)) {
-                    throw duplicate(option);
-                }
-            }
-        }
-
-        private void verifyStructuralDuplicate(
-                RequiredOption current) {
-
-            for (Option<?> option :
-                    current.getOptions()) {
-
-                if (optionalOptions.contains(option)) {
-                    throw duplicate(option);
-                }
-
-                for (RequiredOption existing :
-                        requiredOptions) {
-                    if (existing.getOptions()
-                            .contains(option)) {
-                        throw duplicate(option);
-                    }
-                }
-            }
-        }
-
-        private void verifyConditionalTarget(
-                Option<?>[] options) {
-
-            for (Option<?> option : options) {
-                for (RequiredOption existing :
-                        requiredOptions) {
-
-                    if (existing
-                            instanceof
-                            RequiredOption
-                                    .ConditionalRequiredOptions) {
-                        continue;
-                    }
-
-                    if (existing.getOptions()
-                            .contains(option)) {
-                        throw duplicate(option);
-                    }
-                }
-            }
-        }
-
         private void verifyConditionalExists(
                 Option<?> conditionOption) {
 
-            if (optionalOptions.contains(
-                    conditionOption)) {
-                return;
-            }
-
-            for (RequiredOption required :
-                    requiredOptions) {
-                if (required.getOptions()
-                        .contains(conditionOption)) {
-                    return;
-                }
-            }
-
-            throw new OptionValidationException(
-                    "Conditional option '%s' is not declared",
-                    conditionOption.key());
+            OptionRuleBuilderSupport.verifyConditionalExists(
+                    conditionOption,
+                    optionalOptions,
+                    requiredOptions);
         }
     }
 }
