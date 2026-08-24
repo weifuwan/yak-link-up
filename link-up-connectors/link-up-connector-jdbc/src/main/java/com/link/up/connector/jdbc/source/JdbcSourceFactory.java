@@ -8,14 +8,14 @@ import com.link.up.api.connector.schema.ConnectorCapability;
 import com.link.up.api.source.SourceFactoryContext;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.factory.TableSourceFactory;
+import com.link.up.connector.jdbc.catalog.JdbcCatalogUtils;
+import com.link.up.connector.jdbc.client.JdbcConnectionPreflight;
 import com.link.up.connector.jdbc.config.JdbcCommonOptions;
 import com.link.up.connector.jdbc.config.JdbcSourceConfig;
 import com.link.up.connector.jdbc.config.JdbcSourceOptions;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialectLoader;
 import com.link.up.connector.jdbc.options.MultiTableCommonOptions;
-import com.link.up.connector.jdbc.utils.JdbcCatalogUtils;
-import com.link.up.connector.jdbc.utils.JdbcConnectionPreflight;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -67,7 +67,6 @@ public final class JdbcSourceFactory
             ClassLoader classLoader)
             throws Exception {
 
-        // 先解析 Source 规则，再执行不读表、不执行 SQL 的 JDBC 连接验证。
         JdbcSourceConfig.of(
                 Objects.requireNonNull(
                         options,
@@ -83,15 +82,8 @@ public final class JdbcSourceFactory
             SourceFactoryContext context)
             throws Exception {
 
-        JdbcSourceConfig config =
-                createConfig(context);
-
-        /*
-         * Factory 阶段只校验方言能否成功加载，
-         * 不在这里建立连接或修改连接参数。
-         */
+        JdbcSourceConfig config = createConfig(context);
         loadDialect(config);
-
         return new JdbcSource(config);
     }
 
@@ -100,11 +92,8 @@ public final class JdbcSourceFactory
             SourceFactoryContext context)
             throws Exception {
 
-        JdbcSourceConfig config =
-                createConfig(context);
-
-        JdbcDialect dialect =
-                loadDialect(config);
+        JdbcSourceConfig config = createConfig(context);
+        JdbcDialect dialect = loadDialect(config);
 
         Map<?, JdbcSourceTable> tables =
                 JdbcCatalogUtils.getTables(
@@ -112,28 +101,17 @@ public final class JdbcSourceFactory
                         dialect);
 
         List<CatalogTable> result =
-                new ArrayList<CatalogTable>(
-                        tables.size());
+                new ArrayList<CatalogTable>(tables.size());
 
-        for (JdbcSourceTable table :
-                tables.values()) {
-            result.add(
-                    table.getCatalogTable());
+        for (JdbcSourceTable table : tables.values()) {
+            result.add(table.getCatalogTable());
         }
 
-        return Collections.unmodifiableList(
-                result);
+        return Collections.unmodifiableList(result);
     }
 
     @Override
     public OptionRule optionRule() {
-        /*
-         * URL、Driver、用户名、密码和连接属性，
-         * 统一复用 JDBC 公共连接规则。
-         *
-         * table_list 与 table_path 的互斥关系，
-         * 由 JdbcSourceTableConfig.from() 统一校验。
-         */
         return JdbcCommonOptions.baseConnectionRule()
                 .optional(
                         JdbcSourceOptions.TABLE_LIST,
@@ -156,9 +134,6 @@ public final class JdbcSourceFactory
                 .build();
     }
 
-    /**
-     * 创建并校验 JDBC Source 配置。
-     */
     private JdbcSourceConfig createConfig(
             SourceFactoryContext context) {
 
@@ -171,15 +146,9 @@ public final class JdbcSourceFactory
                         context.getOptions(),
                         "source options must not be null");
 
-        return JdbcSourceConfig.of(
-                options);
+        return JdbcSourceConfig.of(options);
     }
 
-    /**
-     * 加载当前数据库方言。
-     *
-     * <p>这里只完成方言识别，不修改配置，也不建立数据库连接。
-     */
     private JdbcDialect loadDialect(
             JdbcSourceConfig config) {
 

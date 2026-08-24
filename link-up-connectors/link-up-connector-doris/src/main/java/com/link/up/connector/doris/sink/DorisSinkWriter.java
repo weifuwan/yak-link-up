@@ -15,7 +15,7 @@ import com.link.up.api.table.type.FluxRow;
 import com.link.up.connector.doris.client.DorisStreamLoadClient;
 import com.link.up.connector.doris.client.DorisStreamLoadClient.StreamLoadResponse;
 import com.link.up.connector.doris.config.DorisSinkConfig;
-import com.link.up.connector.doris.serializer.DorisRowSerializer;
+import com.link.up.connector.doris.converter.DorisRowSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,12 +51,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
     private TableSchema schema;
     private DorisRowSerializer serializer;
 
-    /**
-     * 2PC 模式下收集的待提交事务 ID。
-     *
-     * <p>每次 flush 成功后从响应中提取 TxnId，
-     * 在 {@link #commit()} 中统一提交。
-     */
     private final List<String> pendingTxnIds = new ArrayList<>();
 
     private long totalWrittenRows = 0;
@@ -89,7 +83,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
             return;
         }
 
-        // 延迟初始化 schema
         if (schema == null && sourceTable != null && sourceTable.getTableSchema() != null) {
             schema = sourceTable.getTableSchema();
         }
@@ -105,7 +98,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
 
     @Override
     public void prepareCommit() throws Exception {
-        // 提交前刷新缓冲区（2PC 模式下 flush 产生 PREPARE 事务，但不提交）
         flush();
     }
 
@@ -117,8 +109,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
                 client.commitTransactions(pendingTxnIds);
                 LOG.info("All {} 2PC transactions committed successfully", pendingTxnIds.size());
             } catch (IOException e) {
-                // 部分提交失败：保留 pendingTxnIds 不清除，
-                // 让 abort() 或 close() 尝试回滚剩余事务
                 LOG.error("2PC commit failed, {} transactions may be in inconsistent state. "
                         + "Committed transactions will not be rolled back.",
                         pendingTxnIds.size(), e);
@@ -146,7 +136,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
 
     @Override
     public CommitScope getCommitScope() {
-        // 2PC 模式下数据在 commit() 时才真正可见，支持 Job 级原子性
         return CommitScope.TASK_LOCAL;
     }
 
@@ -162,16 +151,11 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
     @Override
     public void close() throws Exception {
         try {
-            // 2PC 模式下，如果还有未提交的事务，回滚它们
-            // 注意：不在 close() 中 flush，因为 flush 产生的 PREPARE 事务
-            // 会被下面的 abort 回滚，导致数据丢失。
-            // 正常流程中 prepareCommit() 已经 flush 了所有数据。
             if (enable2pc && !pendingTxnIds.isEmpty()) {
                 LOG.warn("Closing with {} uncommitted 2PC transactions, aborting...", pendingTxnIds.size());
                 client.abortTransactions(pendingTxnIds);
                 pendingTxnIds.clear();
             }
-            // 非 2PC 模式下，close 前刷新残余数据
             if (!enable2pc && !buffer.isEmpty()) {
                 flush();
             }
@@ -192,9 +176,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
                 totalWrittenRows, totalLoadRequests, totalFilteredRows, enable2pc);
     }
 
-    /**
-     * 将缓冲区数据通过 Stream Load 写入 Doris。
-     */
     private void flush() throws Exception {
         if (buffer.isEmpty()) {
             return;
@@ -229,7 +210,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
             LOG.warn("Stream Load filtered {} rows, message: {}",
                     response.getNumberFilteredRows(), response.getMessage());
 
-            // 记录到 DirtyData 收集器
             if (dirtyDataCollector != null) {
                 try {
                     dirtyDataCollector.recordAttempt(buffer.size());
@@ -250,7 +230,6 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
             }
         }
 
-        // 2PC 模式：收集事务 ID，等待 commit() 时统一提交
         if (enable2pc) {
             String txnId = response.getTxnId();
             if (txnId == null || txnId.isEmpty()) {
@@ -258,12 +237,11 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
                         "2PC enabled but Doris returned no TxnId. "
                         + "Response: " + response.getBody());
             }
-            // 校验 TxnState 应为 PREPARE
             if (!response.isPrepared()) {
                 throw new IOException(
                         "2PC enabled but TxnState is not PREPARE: txnId=" + txnId
-                        + ", txnState=" + response.getTxnState()
-                        + ", response=" + response.getBody());
+                                + ", txnState=" + response.getTxnState()
+                                + ", response=" + response.getBody());
             }
             pendingTxnIds.add(txnId);
             LOG.debug("Collected 2PC txnId={}, pending count={}", txnId, pendingTxnIds.size());
@@ -272,12 +250,9 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwar
         buffer.clear();
     }
 
-    // ── DirtyData 支持 ─────────────────────────────────────
-
     @Override
     public void configureDirtyData(DirtyDataContext context) throws Exception {
         this.dirtyDataContext = context;
-        // 默认使用 BoundedMemory 收集器，用户可通过框架配置切换
         this.dirtyDataCollector = new com.link.up.api.dirtydata.BoundedMemoryDirtyDataCollector(
                 context.getTaskId(), 100, 1000, 0.1);
     }

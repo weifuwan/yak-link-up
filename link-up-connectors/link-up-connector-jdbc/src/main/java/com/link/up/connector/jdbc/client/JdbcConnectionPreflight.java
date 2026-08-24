@@ -1,4 +1,4 @@
-package com.link.up.connector.jdbc.utils;
+package com.link.up.connector.jdbc.client;
 
 import com.link.up.api.configuration.ReadonlyConfig;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
@@ -10,10 +10,11 @@ import java.util.Objects;
 import java.util.Properties;
 
 /**
- * JDBC 只读连接预检。
+ * JDBC read-only connection preflight.
  *
- * <p>仅加载驱动、建立连接并调用 {@link Connection#isValid(int)}，不执行 SQL，
- * 不开启事务，也不修改数据库对象。
+ * <p>Only loads the configured driver, opens a connection and calls
+ * {@link Connection#isValid(int)}. It does not execute SQL, start a
+ * transaction or modify database objects.</p>
  */
 public final class JdbcConnectionPreflight {
 
@@ -35,8 +36,7 @@ public final class JdbcConnectionPreflight {
                         "classLoader must not be null");
 
         JdbcConnectionConfig config =
-                JdbcConnectionConfig.of(
-                        options);
+                JdbcConnectionConfig.of(options);
 
         Class<?> driverType =
                 Class.forName(
@@ -44,8 +44,7 @@ public final class JdbcConnectionPreflight {
                         true,
                         loader);
 
-        if (!Driver.class.isAssignableFrom(
-                driverType)) {
+        if (!Driver.class.isAssignableFrom(driverType)) {
             throw new IllegalArgumentException(
                     "Configured JDBC driver does not implement java.sql.Driver: "
                             + config.getDriverName());
@@ -56,8 +55,7 @@ public final class JdbcConnectionPreflight {
                         .getDeclaredConstructor()
                         .newInstance();
 
-        Properties properties =
-                config.toProperties();
+        Properties properties = config.toProperties();
 
         Connection connection =
                 driver.connect(
@@ -76,8 +74,7 @@ public final class JdbcConnectionPreflight {
                             1,
                             config.getConnectionCheckTimeoutSeconds());
 
-            if (!connection.isValid(
-                    timeout)) {
+            if (!connection.isValid(timeout)) {
                 throw new SQLException(
                         "JDBC connection validation returned false");
             }
