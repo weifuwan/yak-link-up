@@ -14,9 +14,7 @@ import org.apache.logging.log4j.Logger;
 import java.nio.file.Path;
 import java.util.Objects;
 
-/**
- * Local offline Link-Up execution engine.
- */
+/** Local offline Link-Up execution engine and composition boundary. */
 public final class LocalFluxEngine
         implements FluxEngine {
 
@@ -32,6 +30,7 @@ public final class LocalFluxEngine
             ClassLoader classLoader,
             ConnectorPreparer connectorPreparer,
             JobPlanner jobPlanner) {
+
         this(
                 classLoader,
                 connectorPreparer,
@@ -60,69 +59,47 @@ public final class LocalFluxEngine
     public static LocalFluxEngine create(
             ClassLoader classLoader) {
 
-        ClassLoader effectiveClassLoader =
-                classLoader == null
-                        ? Thread.currentThread()
-                                .getContextClassLoader()
-                        : classLoader;
+        ClassLoader effective =
+                effectiveClassLoader(classLoader);
 
-        FactoryRegistry registry =
-                FactoryRegistry.discover(
-                        effectiveClassLoader);
-        ConnectorPreparer preparer =
-                new ConnectorPreparer(
-                        registry,
-                        effectiveClassLoader);
-        JobPlanner planner = new JobPlanner();
-
-        return new LocalFluxEngine(
-                effectiveClassLoader,
-                preparer,
-                planner,
-                registry);
+        return assemble(
+                effective,
+                FactoryRegistry.discover(effective));
     }
 
     public static LocalFluxEngine create(
             ClassLoader classLoader,
             Path... pluginDirectories) {
 
-        ClassLoader effectiveClassLoader =
-                classLoader == null
-                        ? Thread.currentThread()
-                                .getContextClassLoader()
-                        : classLoader;
+        ClassLoader effective =
+                effectiveClassLoader(classLoader);
 
-        FactoryRegistry registry =
+        return assemble(
+                effective,
                 FactoryRegistry.discover(
-                        effectiveClassLoader,
-                        pluginDirectories);
-
-        return new LocalFluxEngine(
-                effectiveClassLoader,
-                new ConnectorPreparer(
-                        registry,
-                        effectiveClassLoader),
-                new JobPlanner(),
-                registry);
+                        effective,
+                        pluginDirectories));
     }
 
     @Override
-    public JobResult execute(
-            JobDefinition definition)
+    public JobResult execute(JobDefinition definition)
             throws Exception {
-        return execute(definition, null);
+
+        return execute(
+                definition,
+                null);
     }
 
     /**
-     * Exposes the active JobExecution to the local server so cancellation can
-     * be propagated after planning and before/during task execution.
+     * Executes one prepared job and exposes the active execution to an optional
+     * listener used by the local Worker control plane.
      */
     public JobResult execute(
             JobDefinition definition,
             JobExecutionListener listener)
             throws Exception {
 
-        Objects.requireNonNull(
+        JobDefinition job = Objects.requireNonNull(
                 definition,
                 "definition must not be null");
 
@@ -130,54 +107,30 @@ public final class LocalFluxEngine
                 System.currentTimeMillis();
         String runId =
                 JobLogFileName.createJobId(
-                        definition.getName(),
+                        job.getName(),
                         logIdentityTimeMillis);
         String jobLogFile =
                 JobLogFileName.create(
-                        definition.getName(),
+                        job.getName(),
                         logIdentityTimeMillis);
 
         try (CloseableThreadContext.Instance ignored =
-                     CloseableThreadContext
-                             .put("runId", runId)
-                             .put("jobId", runId)
-                             .put("jobName", definition.getName())
-                             .put("jobLogFile", jobLogFile)) {
+                     openLogContext(
+                             job,
+                             runId,
+                             jobLogFile)) {
 
-            if (listener != null) {
-                listener.onJobLogCreated(
-                        runId,
-                        jobLogFile);
-            }
+            notifyJobLogCreated(
+                    listener,
+                    runId,
+                    jobLogFile);
 
-            LOG.info(
-                    "Job preparation started: jobName={}, runId={}",
-                    definition.getName(),
-                    runId);
+            JobGraph jobGraph =
+                    prepareAndPlan(
+                            job,
+                            runId);
 
-            PreparedJob preparedJob;
-            JobGraph jobGraph;
-
-            try {
-                preparedJob = connectorPreparer.prepare(definition);
-                jobGraph = jobPlanner.plan(preparedJob);
-            } catch (Exception failure) {
-                LOG.error(
-                        "Job preparation failed: jobName={}, runId={}",
-                        definition.getName(),
-                        runId,
-                        failure);
-                throw failure;
-            } catch (Error failure) {
-                LOG.error(
-                        "Job preparation failed: jobName={}, runId={}",
-                        definition.getName(),
-                        runId,
-                        failure);
-                throw failure;
-            }
-
-            JobExecution jobExecution =
+            JobExecution execution =
                     new JobExecution(
                             jobGraph,
                             classLoader,
@@ -185,21 +138,113 @@ public final class LocalFluxEngine
                             runId,
                             jobLogFile);
 
-            if (listener != null) {
-                listener.onJobExecutionCreated(jobExecution);
-            }
+            notifyJobExecutionCreated(
+                    listener,
+                    execution);
 
-            return jobExecution.execute();
+            return execution.execute();
 
         } finally {
-            if (registry != null) {
-                registry.close();
-            }
+            closeRegistry();
         }
     }
 
     @Override
     public void close() {
+        closeRegistry();
+    }
+
+    private JobGraph prepareAndPlan(
+            JobDefinition definition,
+            String runId)
+            throws Exception {
+
+        LOG.info(
+                "Job preparation started: jobName={}, runId={}",
+                definition.getName(),
+                runId);
+
+        try {
+            PreparedJob preparedJob =
+                    connectorPreparer.prepare(
+                            definition);
+
+            return jobPlanner.plan(preparedJob);
+
+        } catch (Exception failure) {
+            LOG.error(
+                    "Job preparation failed: jobName={}, runId={}",
+                    definition.getName(),
+                    runId,
+                    failure);
+            throw failure;
+
+        } catch (Error failure) {
+            LOG.error(
+                    "Job preparation failed: jobName={}, runId={}",
+                    definition.getName(),
+                    runId,
+                    failure);
+            throw failure;
+        }
+    }
+
+    private static LocalFluxEngine assemble(
+            ClassLoader classLoader,
+            FactoryRegistry registry) {
+
+        return new LocalFluxEngine(
+                classLoader,
+                new ConnectorPreparer(
+                        registry,
+                        classLoader),
+                new JobPlanner(),
+                registry);
+    }
+
+    private static ClassLoader effectiveClassLoader(
+            ClassLoader classLoader) {
+
+        return classLoader == null
+                ? Thread.currentThread()
+                .getContextClassLoader()
+                : classLoader;
+    }
+
+    private static CloseableThreadContext.Instance openLogContext(
+            JobDefinition definition,
+            String runId,
+            String jobLogFile) {
+
+        return CloseableThreadContext
+                .put("runId", runId)
+                .put("jobId", runId)
+                .put("jobName", definition.getName())
+                .put("jobLogFile", jobLogFile);
+    }
+
+    private static void notifyJobLogCreated(
+            JobExecutionListener listener,
+            String runId,
+            String jobLogFile) {
+
+        if (listener != null) {
+            listener.onJobLogCreated(
+                    runId,
+                    jobLogFile);
+        }
+    }
+
+    private static void notifyJobExecutionCreated(
+            JobExecutionListener listener,
+            JobExecution execution) {
+
+        if (listener != null) {
+            listener.onJobExecutionCreated(execution);
+        }
+    }
+
+    private void closeRegistry() {
         if (registry != null) {
             registry.close();
         }
