@@ -73,12 +73,26 @@ public final class ExecutionGraph {
         }
 
         JobStatus finalStatus = result.getStatus();
-        if (finalStatus != JobStatus.SUCCEEDED
-                && finalStatus != JobStatus.FAILED
-                && finalStatus != JobStatus.CANCELED) {
+        if (!isTerminal(finalStatus)) {
             throw new IllegalArgumentException(
                     "result status must be terminal: "
                             + finalStatus);
+        }
+
+        if (!jobGraph.getJobName().equals(result.getJobName())) {
+            throw new IllegalArgumentException(
+                    "result jobName does not match JobGraph: "
+                            + result.getJobName());
+        }
+
+        if (result.getStartTimeMillis() != startTimeMillis) {
+            throw new IllegalArgumentException(
+                    "result startTimeMillis does not match ExecutionGraph");
+        }
+
+        if (result.getEndTimeMillis() < startTimeMillis) {
+            throw new IllegalArgumentException(
+                    "result endTimeMillis must not precede execution start");
         }
 
         this.result = result;
@@ -101,7 +115,10 @@ public final class ExecutionGraph {
                 : JobStatus.FAILED;
     }
 
-    void requestCancellation(Throwable cause) {
+    synchronized void requestCancellation(Throwable cause) {
+        if (isTerminal(status)) {
+            return;
+        }
         cancellationToken.cancel(cause);
     }
 

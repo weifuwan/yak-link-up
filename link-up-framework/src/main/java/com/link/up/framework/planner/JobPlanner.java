@@ -65,6 +65,11 @@ public final class JobPlanner {
                 new LinkedHashMap<String, List<SplitT>>();
 
         for (SplitT split : splits) {
+            if (split == null) {
+                throw new IllegalStateException(
+                        "Source returned a null split");
+            }
+
             String id = split.dataSetId();
             if (id == null || id.trim().isEmpty()) {
                 throw new IllegalStateException(
@@ -144,6 +149,7 @@ public final class JobPlanner {
                             pipelineId,
                             dataSetId,
                             table,
+                            entry.getValue(),
                             sources,
                             sinkPlans,
                             config.getSplitAssignmentMode()));

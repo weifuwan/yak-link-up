@@ -10,6 +10,7 @@ import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -47,6 +48,7 @@ public class ExecutionGraphTest {
 
         assertEquals(JobStatus.SUCCEEDED, executionGraph.getStatus());
         assertEquals(250L, executionGraph.getEndTimeMillis());
+        assertSame(result, executionGraph.getResult());
         assertTrue(executionGraph.isTerminal());
     }
 
@@ -67,6 +69,81 @@ public class ExecutionGraphTest {
 
         assertTrue(executionGraph.isCancellationRequested());
         assertEquals(JobStatus.CREATED, executionGraph.getStatus());
+    }
+
+    @Test
+    public void shouldIsolateRuntimeStateAcrossExecutionsOfSameJobGraph() {
+        JobGraph jobGraph = emptyGraph();
+        ExecutionGraph first =
+                new ExecutionGraph(
+                        jobGraph,
+                        100L,
+                        "run-a",
+                        "job-run-a.log");
+        ExecutionGraph second =
+                new ExecutionGraph(
+                        jobGraph,
+                        200L,
+                        "run-b",
+                        "job-run-b.log");
+
+        assertSame(jobGraph, first.getJobGraph());
+        assertSame(jobGraph, second.getJobGraph());
+        assertNotSame(first.getMetrics(), second.getMetrics());
+
+        first.requestCancellation(
+                new java.util.concurrent.CancellationException(
+                        "cancel first run"));
+
+        assertTrue(first.isCancellationRequested());
+        assertFalse(second.isCancellationRequested());
+        assertEquals(JobStatus.CREATED, second.getStatus());
+    }
+
+    @Test
+    public void shouldIgnoreLateCancellationAfterTerminalCompletion() {
+        ExecutionGraph executionGraph =
+                new ExecutionGraph(
+                        emptyGraph(),
+                        100L,
+                        "run-4",
+                        "job-run-4.log");
+        executionGraph.markRunning();
+        executionGraph.complete(
+                new JobResult(
+                        "phase-2-test",
+                        JobStatus.SUCCEEDED,
+                        100L,
+                        250L,
+                        executionGraph.getMetrics(),
+                        null));
+
+        executionGraph.requestCancellation(
+                new java.util.concurrent.CancellationException(
+                        "too late"));
+
+        assertEquals(JobStatus.SUCCEEDED, executionGraph.getStatus());
+        assertFalse(executionGraph.isCancellationRequested());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectTerminalResultForDifferentJob() {
+        ExecutionGraph executionGraph =
+                new ExecutionGraph(
+                        emptyGraph(),
+                        100L,
+                        "run-5",
+                        "job-run-5.log");
+        executionGraph.markRunning();
+
+        executionGraph.complete(
+                new JobResult(
+                        "different-job",
+                        JobStatus.SUCCEEDED,
+                        100L,
+                        250L,
+                        executionGraph.getMetrics(),
+                        null));
     }
 
     @Test(expected = IllegalStateException.class)

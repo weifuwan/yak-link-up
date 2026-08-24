@@ -22,15 +22,16 @@ public final class PipelineGraph<SplitT extends SourceSplit> {
     private final String dataSetId;
     private final TablePath dataSetPath;
     private final CatalogTable catalogTable;
+    private final List<SplitT> sourceSplits;
     private final List<SourceTaskPlan<SplitT>> sourceTaskPlans;
     private final List<SinkTaskPlan> sinkTaskPlans;
-    private final List<SplitT> sourceSplits;
     private final SplitAssignmentMode splitAssignmentMode;
 
     public PipelineGraph(
             String pipelineId,
             String dataSetId,
             CatalogTable catalogTable,
+            List<SplitT> sourceSplits,
             List<SourceTaskPlan<SplitT>> sourceTaskPlans,
             List<SinkTaskPlan> sinkTaskPlans,
             SplitAssignmentMode splitAssignmentMode) {
@@ -43,6 +44,9 @@ public final class PipelineGraph<SplitT extends SourceSplit> {
         this.dataSetPath = Objects.requireNonNull(
                 catalogTable.getTablePath(),
                 "catalogTable.tablePath must not be null");
+        this.sourceSplits = immutable(
+                sourceSplits,
+                "sourceSplits");
         this.sourceTaskPlans = immutable(
                 sourceTaskPlans,
                 "sourceTaskPlans");
@@ -53,18 +57,30 @@ public final class PipelineGraph<SplitT extends SourceSplit> {
                 splitAssignmentMode,
                 "splitAssignmentMode must not be null");
 
+        if (this.sourceSplits.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "sourceSplits must not be empty");
+        }
+
         if (this.sourceTaskPlans.isEmpty()
                 || this.sinkTaskPlans.isEmpty()) {
             throw new IllegalArgumentException(
                     "pipeline tasks must not be empty");
         }
 
-        List<SplitT> splits = new ArrayList<SplitT>();
+        int assignedSplitCount = 0;
         for (SourceTaskPlan<SplitT> sourceTaskPlan :
                 this.sourceTaskPlans) {
-            splits.addAll(sourceTaskPlan.getSplits());
+            assignedSplitCount += sourceTaskPlan.getSplits().size();
         }
-        this.sourceSplits = Collections.unmodifiableList(splits);
+
+        if (assignedSplitCount != this.sourceSplits.size()) {
+            throw new IllegalArgumentException(
+                    "source task assignments must cover all source splits: assigned="
+                            + assignedSplitCount
+                            + ", total="
+                            + this.sourceSplits.size());
+        }
     }
 
     private static String requireText(String value, String name) {
@@ -77,11 +93,20 @@ public final class PipelineGraph<SplitT extends SourceSplit> {
     private static <T> List<T> immutable(
             List<T> values,
             String name) {
-        return Collections.unmodifiableList(
-                new ArrayList<T>(
-                        Objects.requireNonNull(
-                                values,
-                                name + " must not be null")));
+
+        Objects.requireNonNull(
+                values,
+                name + " must not be null");
+
+        List<T> copy = new ArrayList<T>(values.size());
+        for (T value : values) {
+            copy.add(
+                    Objects.requireNonNull(
+                            value,
+                            name + " must not contain null values"));
+        }
+
+        return Collections.unmodifiableList(copy);
     }
 
     public String getPipelineId() {
@@ -100,22 +125,23 @@ public final class PipelineGraph<SplitT extends SourceSplit> {
         return catalogTable;
     }
 
+    /**
+     * Source splits in the original enumeration order returned by the Source.
+     *
+     * <p>This list is intentionally independent from per-task round-robin
+     * assignments. Dynamic execution uses this order when materializing its
+     * runtime-local split queue.
+     */
+    public List<SplitT> getSourceSplits() {
+        return sourceSplits;
+    }
+
     public List<SourceTaskPlan<SplitT>> getSourceTaskPlans() {
         return sourceTaskPlans;
     }
 
     public List<SinkTaskPlan> getSinkTaskPlans() {
         return sinkTaskPlans;
-    }
-
-    /**
-     * All source splits represented by this pipeline graph.
-     *
-     * <p>Static execution consumes the per-task assignments. Dynamic execution
-     * uses this flattened immutable list to create a runtime split queue.
-     */
-    public List<SplitT> getSourceSplits() {
-        return sourceSplits;
     }
 
     public SplitAssignmentMode getSplitAssignmentMode() {
