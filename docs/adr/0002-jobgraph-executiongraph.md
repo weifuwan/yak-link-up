@@ -79,6 +79,10 @@ A new run of the same physical graph receives a new `ExecutionGraph`.
 When `SplitAssignmentMode.DYNAMIC` is selected, `PipelineExecution` creates one `LocalSplitQueue` from the immutable
 pipeline split list and injects that provider into the runtime `SourceTask` instances.
 
+`PipelineGraph` stores the Source's original split enumeration as its own immutable list. It must not reconstruct that
+list by flattening round-robin task assignments: task assignment order and source enumeration order are different
+concepts, and changing the latter would change the acquisition order of `LocalSplitQueue` in dynamic mode.
+
 This preserves the existing dynamic assignment behavior while moving mutable ownership into the execution layer.
 
 ## Consequences
