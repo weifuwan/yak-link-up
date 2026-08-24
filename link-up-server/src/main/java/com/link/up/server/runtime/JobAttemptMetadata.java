@@ -21,6 +21,13 @@ public final class JobAttemptMetadata {
     private final String failureMessage;
     private final String retryAdvice;
 
+    private final boolean commitEvidenceAvailable;
+    private final int dataCommittedTaskCount;
+    private final long successfullyCommittedRecordCount;
+    private final long unknownStateRecordCount;
+    private final boolean partialDataCommit;
+    private final String commitScope;
+
     public JobAttemptMetadata(
             int attemptNumber,
             String attemptId,
@@ -34,14 +41,50 @@ public final class JobAttemptMetadata {
             String failureType,
             String failureMessage,
             String retryAdvice) {
+        this(
+                attemptNumber,
+                attemptId,
+                status,
+                createTimeMillis,
+                queuedTimeMillis,
+                startTimeMillis,
+                endTimeMillis,
+                runId,
+                jobLogFile,
+                failureType,
+                failureMessage,
+                retryAdvice,
+                false,
+                0,
+                0L,
+                0L,
+                false,
+                null);
+    }
+
+    public JobAttemptMetadata(
+            int attemptNumber,
+            String attemptId,
+            JobAttemptStatus status,
+            long createTimeMillis,
+            long queuedTimeMillis,
+            long startTimeMillis,
+            long endTimeMillis,
+            String runId,
+            String jobLogFile,
+            String failureType,
+            String failureMessage,
+            String retryAdvice,
+            boolean commitEvidenceAvailable,
+            int dataCommittedTaskCount,
+            long successfullyCommittedRecordCount,
+            long unknownStateRecordCount,
+            boolean partialDataCommit,
+            String commitScope) {
 
         this.attemptNumber = attemptNumber;
-        this.attemptId = Objects.requireNonNull(
-                attemptId,
-                "attemptId must not be null");
-        this.status = Objects.requireNonNull(
-                status,
-                "status must not be null");
+        this.attemptId = Objects.requireNonNull(attemptId, "attemptId must not be null");
+        this.status = Objects.requireNonNull(status, "status must not be null");
         this.createTimeMillis = createTimeMillis;
         this.queuedTimeMillis = queuedTimeMillis;
         this.startTimeMillis = startTimeMillis;
@@ -51,10 +94,15 @@ public final class JobAttemptMetadata {
         this.failureType = failureType;
         this.failureMessage = failureMessage;
         this.retryAdvice = retryAdvice;
+        this.commitEvidenceAvailable = commitEvidenceAvailable;
+        this.dataCommittedTaskCount = dataCommittedTaskCount;
+        this.successfullyCommittedRecordCount = successfullyCommittedRecordCount;
+        this.unknownStateRecordCount = unknownStateRecordCount;
+        this.partialDataCommit = partialDataCommit;
+        this.commitScope = commitScope;
     }
 
-    public static JobAttemptMetadata from(
-            JobExecutionAttempt attempt) {
+    public static JobAttemptMetadata from(JobExecutionAttempt attempt) {
         return new JobAttemptMetadata(
                 attempt.getAttemptNumber(),
                 attempt.getAttemptId(),
@@ -67,7 +115,35 @@ public final class JobAttemptMetadata {
                 attempt.getJobLogFile(),
                 attempt.getFailureType(),
                 attempt.getFailureMessage(),
-                attempt.getRetryAdvice());
+                attempt.getRetryAdvice(),
+                attempt.isCommitEvidenceAvailable(),
+                attempt.getDataCommittedTaskCount(),
+                attempt.getSuccessfullyCommittedRecordCount(),
+                attempt.getUnknownStateRecordCount(),
+                attempt.isPartialDataCommit(),
+                attempt.getCommitScope());
+    }
+
+    public JobExecutionAttempt toDomain() {
+        return JobExecutionAttempt.restore(
+                attemptNumber,
+                attemptId,
+                status,
+                createTimeMillis,
+                queuedTimeMillis,
+                startTimeMillis,
+                endTimeMillis,
+                runId,
+                jobLogFile,
+                failureType,
+                failureMessage,
+                retryAdvice,
+                commitEvidenceAvailable,
+                dataCommittedTaskCount,
+                successfullyCommittedRecordCount,
+                unknownStateRecordCount,
+                partialDataCommit,
+                commitScope);
     }
 
     public JobAttemptMetadata recoverLost(
@@ -90,7 +166,13 @@ public final class JobAttemptMetadata {
                 jobLogFile,
                 "WorkerRestartRecovery",
                 reason,
-                retryAdvice);
+                retryAdvice,
+                false,
+                dataCommittedTaskCount,
+                successfullyCommittedRecordCount,
+                unknownStateRecordCount,
+                partialDataCommit,
+                commitScope);
     }
 
     public int getAttemptNumber() { return attemptNumber; }
@@ -105,4 +187,10 @@ public final class JobAttemptMetadata {
     public String getFailureType() { return failureType; }
     public String getFailureMessage() { return failureMessage; }
     public String getRetryAdvice() { return retryAdvice; }
+    public boolean isCommitEvidenceAvailable() { return commitEvidenceAvailable; }
+    public int getDataCommittedTaskCount() { return dataCommittedTaskCount; }
+    public long getSuccessfullyCommittedRecordCount() { return successfullyCommittedRecordCount; }
+    public long getUnknownStateRecordCount() { return unknownStateRecordCount; }
+    public boolean isPartialDataCommit() { return partialDataCommit; }
+    public String getCommitScope() { return commitScope; }
 }

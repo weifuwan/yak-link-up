@@ -42,4 +42,23 @@ public class JobStateMachineTest {
                 ServerJobStatus.SUCCEEDED,
                 ServerJobStatus.RUNNING));
     }
+
+    @Test
+    public void shouldKeepRetryOutsideNormalTerminalTransitions() {
+        assertFalse(JobStateMachine.canTransition(
+                ServerJobStatus.FAILED,
+                ServerJobStatus.SUBMITTED));
+        assertTrue(JobStateMachine.canRetryTransition(
+                ServerJobStatus.FAILED,
+                ServerJobStatus.SUBMITTED));
+        assertFalse(JobStateMachine.canRetryTransition(
+                ServerJobStatus.LOST,
+                ServerJobStatus.SUBMITTED));
+        assertFalse(JobStateMachine.canRetryTransition(
+                ServerJobStatus.CANCELED,
+                ServerJobStatus.SUBMITTED));
+        assertFalse(JobStateMachine.canRetryTransition(
+                ServerJobStatus.SUCCEEDED,
+                ServerJobStatus.SUBMITTED));
+    }
 }

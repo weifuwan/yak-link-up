@@ -1,6 +1,7 @@
 package com.link.up.server.dto;
 
 import com.link.up.api.sink.TableDdl;
+import com.link.up.server.application.JobRetryDecision;
 import com.link.up.server.runtime.JobAttemptMetadata;
 import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobSnapshot;
@@ -18,14 +19,26 @@ public final class JobResponse {
     private final JobSnapshot snapshot;
     private final JobExecutionMetadata metadata;
     private final WorkerIdentity worker;
+    private final Retry retry;
 
     public JobResponse(
             JobSnapshot snapshot,
             JobExecutionMetadata metadata,
             WorkerIdentity worker) {
+        this(snapshot, metadata, worker, null);
+    }
+
+    public JobResponse(
+            JobSnapshot snapshot,
+            JobExecutionMetadata metadata,
+            WorkerIdentity worker,
+            JobRetryDecision retryDecision) {
         this.snapshot = snapshot;
         this.metadata = metadata;
         this.worker = worker;
+        this.retry = retryDecision == null
+                ? null
+                : Retry.from(retryDecision);
     }
 
     public JobSnapshot.Summary toSummary() { return snapshot.toSummary(); }
@@ -47,8 +60,8 @@ public final class JobResponse {
     public long getDurationMillis() { return snapshot.getDurationMillis(); }
     public JobSnapshot.Metrics getMetrics() { return snapshot.getMetrics(); }
     public JobSnapshot.Commit getCommitSummary() { return snapshot.getCommitSummary(); }
+    public Retry getRetry() { return retry; }
 
-    /** Additive Phase-7 protocol field: immutable execution-attempt history. */
     public List<JobAttemptMetadata> getAttempts() {
         return metadata == null
                 ? Collections.<JobAttemptMetadata>emptyList()
@@ -56,14 +69,11 @@ public final class JobResponse {
     }
 
     public int getAttemptCount() {
-        return metadata == null
-                ? 0
-                : metadata.getAttemptCount();
+        return metadata == null ? 0 : metadata.getAttemptCount();
     }
 
     public List<PipelineResponse> getPipelines() {
-        List<PipelineResponse> result =
-                new ArrayList<PipelineResponse>();
+        List<PipelineResponse> result = new ArrayList<PipelineResponse>();
         for (JobSnapshot.Pipeline pipeline : snapshot.getPipelines()) {
             TableDdl tableDdl = metadata == null
                     ? null
@@ -81,4 +91,36 @@ public final class JobResponse {
 
     public String getErrorCode() { return snapshot.getErrorCode(); }
     public String getErrorMessage() { return snapshot.getErrorMessage(); }
+
+    /** Additive Phase-8 retry eligibility view. */
+    public static final class Retry {
+        private final boolean eligible;
+        private final String code;
+        private final String message;
+        private final int nextAttemptNumber;
+
+        private Retry(
+                boolean eligible,
+                String code,
+                String message,
+                int nextAttemptNumber) {
+            this.eligible = eligible;
+            this.code = code;
+            this.message = message;
+            this.nextAttemptNumber = nextAttemptNumber;
+        }
+
+        static Retry from(JobRetryDecision decision) {
+            return new Retry(
+                    decision.isEligible(),
+                    decision.getCode(),
+                    decision.getMessage(),
+                    decision.getNextAttemptNumber());
+        }
+
+        public boolean isEligible() { return eligible; }
+        public String getCode() { return code; }
+        public String getMessage() { return message; }
+        public int getNextAttemptNumber() { return nextAttemptNumber; }
+    }
 }

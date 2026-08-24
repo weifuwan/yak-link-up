@@ -1,6 +1,7 @@
 package com.link.up.server.http;
 
 import com.link.up.server.application.JobNotFoundException;
+import com.link.up.server.application.JobRetryNotAllowedException;
 import com.link.up.server.application.JobSubmissionConflictException;
 import com.link.up.server.dto.ErrorResponse;
 import com.link.up.server.runtime.JobStateConflictException;
@@ -19,19 +20,14 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * REST unified exception mapping and request ID generation.
- */
-public final class ExceptionHandlingFilter
-        implements Filter {
+/** REST unified exception mapping and request ID generation. */
+public final class ExceptionHandlingFilter implements Filter {
 
     public static final String REQUEST_ID_ATTRIBUTE =
-            ExceptionHandlingFilter.class.getName()
-                    + ".requestId";
+            ExceptionHandlingFilter.class.getName() + ".requestId";
 
     private static final Logger LOG =
-            Logger.getLogger(
-                    ExceptionHandlingFilter.class.getName());
+            Logger.getLogger(ExceptionHandlingFilter.class.getName());
 
     public void init(FilterConfig filterConfig) {
     }
@@ -42,15 +38,11 @@ public final class ExceptionHandlingFilter
             FilterChain chain)
             throws IOException, ServletException {
 
-        HttpServletRequest request =
-                (HttpServletRequest) servletRequest;
-        HttpServletResponse response =
-                (HttpServletResponse) servletResponse;
+        HttpServletRequest request = (HttpServletRequest) servletRequest;
+        HttpServletResponse response = (HttpServletResponse) servletResponse;
         String requestId = requestId(request);
 
-        request.setAttribute(
-                REQUEST_ID_ATTRIBUTE,
-                requestId);
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
         response.setHeader("X-Request-Id", requestId);
 
         try {
@@ -59,42 +51,30 @@ public final class ExceptionHandlingFilter
             Throwable failure = unwrap(exception);
 
             if (response.isCommitted()) {
-                LOG.log(
-                        Level.SEVERE,
-                        logMessage(request, requestId),
-                        failure);
-
+                LOG.log(Level.SEVERE, logMessage(request, requestId), failure);
                 throw exception instanceof ServletException
                         ? (ServletException) exception
                         : new ServletException(exception);
             }
 
             ErrorMapping mapping = map(failure);
-
             response.resetBuffer();
             response.setStatus(mapping.httpStatus);
             response.setCharacterEncoding("UTF-8");
-            response.setContentType(
-                    "application/json;charset=UTF-8");
+            response.setContentType("application/json;charset=UTF-8");
             response.setHeader("Cache-Control", "no-store");
 
-            JsonSupport.mapper()
-                    .writeValue(
-                            response.getOutputStream(),
-                            new ErrorResponse(
-                                    mapping.code,
-                                    mapping.message,
-                                    requestId));
+            JsonSupport.mapper().writeValue(
+                    response.getOutputStream(),
+                    new ErrorResponse(
+                            mapping.code,
+                            mapping.message,
+                            requestId));
 
-            Level level =
-                    mapping.httpStatus >= 500
-                            ? Level.SEVERE
-                            : Level.WARNING;
-
-            LOG.log(
-                    level,
-                    logMessage(request, requestId),
-                    failure);
+            Level level = mapping.httpStatus >= 500
+                    ? Level.SEVERE
+                    : Level.WARNING;
+            LOG.log(level, logMessage(request, requestId), failure);
         }
     }
 
@@ -109,49 +89,48 @@ public final class ExceptionHandlingFilter
                     exception.getCode(),
                     exception.getMessage());
         }
-
         if (failure instanceof JobNotFoundException) {
             return new ErrorMapping(
                     404,
                     "FLUX-JOB-NOT-FOUND",
                     failure.getMessage());
         }
-
+        if (failure instanceof JobRetryNotAllowedException) {
+            return new ErrorMapping(
+                    409,
+                    "FLUX-JOB-RETRY-NOT-ALLOWED",
+                    failure.getMessage());
+        }
         if (failure instanceof JobStateConflictException) {
             return new ErrorMapping(
                     409,
                     "FLUX-JOB-STATE-CONFLICT",
                     failure.getMessage());
         }
-
         if (failure instanceof JobSubmissionConflictException) {
             return new ErrorMapping(
                     409,
                     "FLUX-JOB-IDEMPOTENCY-CONFLICT",
                     failure.getMessage());
         }
-
         if (failure instanceof IllegalArgumentException) {
             return new ErrorMapping(
                     400,
                     "FLUX-REST-400",
                     safeMessage(failure));
         }
-
         if (failure instanceof RejectedExecutionException) {
             return new ErrorMapping(
                     503,
                     "FLUX-SERVER-BUSY",
                     "Job queue is full");
         }
-
         if (failure instanceof IllegalStateException) {
             return new ErrorMapping(
                     409,
                     "FLUX-REST-409",
                     safeMessage(failure));
         }
-
         return new ErrorMapping(
                 500,
                 "FLUX-REST-500",
@@ -167,8 +146,7 @@ public final class ExceptionHandlingFilter
         return current;
     }
 
-    private static String requestId(
-            HttpServletRequest request) {
+    private static String requestId(HttpServletRequest request) {
         String provided = request.getHeader("X-Request-Id");
         if (provided != null
                 && provided.length() <= 128

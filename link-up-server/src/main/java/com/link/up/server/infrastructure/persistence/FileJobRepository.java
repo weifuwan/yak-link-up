@@ -30,10 +30,10 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
 
 /** Local durable Worker checkpoint repository using versioned per-job JSON files. */
-public final class FileJobRepository
-        implements JobRepository {
+public final class FileJobRepository implements JobRepository {
 
-    private static final int FORMAT_VERSION = 1;
+    private static final int CURRENT_FORMAT_VERSION = 2;
+    private static final int MIN_SUPPORTED_FORMAT_VERSION = 1;
     private static final String FILE_SUFFIX = ".job.json";
 
     private final Path stateDirectory;
@@ -46,17 +46,12 @@ public final class FileJobRepository
     private final ConcurrentLinkedDeque<String> orderedJobIds =
             new ConcurrentLinkedDeque<String>();
 
-    public FileJobRepository(
-            Path stateDirectory,
-            int historyLimit) {
-
+    public FileJobRepository(Path stateDirectory, int historyLimit) {
         if (stateDirectory == null) {
-            throw new IllegalArgumentException(
-                    "stateDirectory must not be null");
+            throw new IllegalArgumentException("stateDirectory must not be null");
         }
         if (historyLimit <= 0) {
-            throw new IllegalArgumentException(
-                    "historyLimit must be greater than 0");
+            throw new IllegalArgumentException("historyLimit must be greater than 0");
         }
 
         this.stateDirectory = stateDirectory.toAbsolutePath().normalize();
@@ -85,19 +80,15 @@ public final class FileJobRepository
             JobExecutionMetadata executionMetadata) {
 
         if (snapshot == null) {
-            throw new IllegalArgumentException(
-                    "snapshot must not be null");
+            throw new IllegalArgumentException("snapshot must not be null");
         }
 
-        JobExecutionMetadata current =
-                metadata.get(snapshot.getJobId());
+        JobExecutionMetadata current = metadata.get(snapshot.getJobId());
         if (isStale(current, executionMetadata)) {
             return;
         }
 
-        JobSnapshot previous = snapshots.put(
-                snapshot.getJobId(),
-                snapshot);
+        JobSnapshot previous = snapshots.put(snapshot.getJobId(), snapshot);
         if (executionMetadata != null) {
             metadata.put(snapshot.getJobId(), executionMetadata);
         }
@@ -135,9 +126,7 @@ public final class FileJobRepository
                 result,
                 new Comparator<JobSnapshot>() {
                     @Override
-                    public int compare(
-                            JobSnapshot left,
-                            JobSnapshot right) {
+                    public int compare(JobSnapshot left, JobSnapshot right) {
                         return Long.compare(
                                 right.getCreateTimeMillis(),
                                 left.getCreateTimeMillis());
@@ -180,21 +169,16 @@ public final class FileJobRepository
         List<JobRepositoryEntry> loaded = new ArrayList<JobRepositoryEntry>();
 
         try (DirectoryStream<Path> stream =
-                     Files.newDirectoryStream(
-                             stateDirectory,
-                             "*" + FILE_SUFFIX)) {
+                     Files.newDirectoryStream(stateDirectory, "*" + FILE_SUFFIX)) {
             for (Path file : stream) {
                 StoredJobRecord record;
                 try {
-                    record = mapper.readValue(
-                            file.toFile(),
-                            StoredJobRecord.class);
+                    record = mapper.readValue(file.toFile(), StoredJobRecord.class);
                 } catch (Exception failure) {
-                    throw new IOException(
-                            "Invalid Worker state file: " + file,
-                            failure);
+                    throw new IOException("Invalid Worker state file: " + file, failure);
                 }
-                if (record.formatVersion != FORMAT_VERSION) {
+                if (record.formatVersion < MIN_SUPPORTED_FORMAT_VERSION
+                        || record.formatVersion > CURRENT_FORMAT_VERSION) {
                     throw new IOException(
                             "Unsupported Worker state formatVersion="
                                     + record.formatVersion
@@ -239,8 +223,7 @@ public final class FileJobRepository
                     ".job-state-",
                     ".tmp");
 
-            try (FileOutputStream output =
-                         new FileOutputStream(temporary.toFile())) {
+            try (FileOutputStream output = new FileOutputStream(temporary.toFile())) {
                 output.write(bytes);
                 output.flush();
                 output.getFD().sync();
@@ -276,8 +259,7 @@ public final class FileJobRepository
     private Path fileFor(String jobId) {
         String encoded = Base64.getUrlEncoder()
                 .withoutPadding()
-                .encodeToString(
-                        jobId.getBytes(StandardCharsets.UTF_8));
+                .encodeToString(jobId.getBytes(StandardCharsets.UTF_8));
         return stateDirectory.resolve(encoded + FILE_SUFFIX);
     }
 
@@ -335,7 +317,7 @@ public final class FileJobRepository
                 JobSnapshot snapshot,
                 JobExecutionMetadata metadata) {
             StoredJobRecord record = new StoredJobRecord();
-            record.formatVersion = FORMAT_VERSION;
+            record.formatVersion = CURRENT_FORMAT_VERSION;
             record.jobId = snapshot.getJobId();
             record.jobName = snapshot.getJobName();
             record.status = snapshot.getStatus().name();
@@ -377,10 +359,8 @@ public final class FileJobRepository
         public boolean cancellationRequested;
         public String runId;
         public String jobLogFile;
-        public List<StoredTransition> transitions =
-                new ArrayList<StoredTransition>();
-        public List<StoredAttempt> attempts =
-                new ArrayList<StoredAttempt>();
+        public List<StoredTransition> transitions = new ArrayList<StoredTransition>();
+        public List<StoredAttempt> attempts = new ArrayList<StoredAttempt>();
 
         public StoredMetadata() {
         }
@@ -486,6 +466,12 @@ public final class FileJobRepository
         public String failureType;
         public String failureMessage;
         public String retryAdvice;
+        public boolean commitEvidenceAvailable;
+        public int dataCommittedTaskCount;
+        public long successfullyCommittedRecordCount;
+        public long unknownStateRecordCount;
+        public boolean partialDataCommit;
+        public String commitScope;
 
         public StoredAttempt() {
         }
@@ -504,6 +490,13 @@ public final class FileJobRepository
             stored.failureType = attempt.getFailureType();
             stored.failureMessage = attempt.getFailureMessage();
             stored.retryAdvice = attempt.getRetryAdvice();
+            stored.commitEvidenceAvailable = attempt.isCommitEvidenceAvailable();
+            stored.dataCommittedTaskCount = attempt.getDataCommittedTaskCount();
+            stored.successfullyCommittedRecordCount =
+                    attempt.getSuccessfullyCommittedRecordCount();
+            stored.unknownStateRecordCount = attempt.getUnknownStateRecordCount();
+            stored.partialDataCommit = attempt.isPartialDataCommit();
+            stored.commitScope = attempt.getCommitScope();
             return stored;
         }
 
@@ -520,7 +513,13 @@ public final class FileJobRepository
                     jobLogFile,
                     failureType,
                     failureMessage,
-                    retryAdvice);
+                    retryAdvice,
+                    commitEvidenceAvailable,
+                    dataCommittedTaskCount,
+                    successfullyCommittedRecordCount,
+                    unknownStateRecordCount,
+                    partialDataCommit,
+                    commitScope);
         }
     }
 }

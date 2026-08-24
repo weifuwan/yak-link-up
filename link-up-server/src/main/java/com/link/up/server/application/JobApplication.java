@@ -7,11 +7,8 @@ import com.link.up.server.runtime.JobSnapshot;
 
 import java.util.List;
 
-/**
- * Use-case boundary exposed to HTTP/registration adapters.
- */
-public interface JobApplication
-        extends AutoCloseable {
+/** Use-case boundary exposed to HTTP/registration adapters. */
+public interface JobApplication extends AutoCloseable {
 
     JobSnapshot submit(JobDefinition definition);
 
@@ -26,6 +23,10 @@ public interface JobApplication
     List<JobSnapshot> listJobs();
 
     JobSnapshot cancel(String jobId);
+
+    JobRetryDecision retryDecision(String jobId);
+
+    JobSnapshot retry(String jobId, JobSubmission submission);
 
     int getRunningJobCount();
 

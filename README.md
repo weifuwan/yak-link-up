@@ -1,117 +1,71 @@
 # Link-Up
 
-Link-Up is a local, batch-oriented data synchronization engine. It currently provides JDBC source and sink connectors,
-HOCON job parsing, parallel source/sink execution, execution metrics, and a standalone Worker API.
+Link-Up 是一个轻量、可嵌入的离线数据同步引擎。它把数据同步拆成稳定的 API、运行时、Connector 和单节点 Worker 控制面，目标是：代码边界清楚、Connector 好扩展、任务可观察、失败可解释。
 
-## Architecture
+## 能做什么
 
-The project is organized around explicit dependency boundaries instead of technical catch-all modules:
+- JDBC / HTTP Source，JDBC / Doris Sink 等 Connector 扩展。
+- 单表、多表的有界批量同步。
+- Source/Sink 并行执行、Split、Channel、Metrics、日志。
+- 单节点 Worker：提交、查询、取消、持久化状态、重启恢复。
+- Job / Attempt 模型：同一个 Job 可以保留多次执行尝试。
+- 安全手动重试：只有明确证明“没有已提交或未知数据”的 FAILED Attempt 才允许重试。
 
-```text
-                    link-up-launcher / link-up-server
-                       /                     \
-                      v                       v
-             link-up-framework        connector implementations
-                      \                       /
-                       v                     v
-                           link-up-api
-```
-
-The rules are intentionally strict:
-
-- `link-up-api` is the stable extension-facing contract. It must not depend on framework, server, launcher, or concrete connectors.
-- `link-up-framework` implements planning and local runtime behavior and depends only on API contracts, never on concrete connector modules.
-- connector modules depend on `link-up-api`, not on framework internals.
-- `link-up-launcher` and `link-up-server` are composition roots that assemble the framework with concrete connectors.
-
-The runtime architecture is Flink-inspired at the role level without copying Flink's distributed complexity. The model
-lifecycle is explicit:
+## 核心模型
 
 ```text
-JobSpec -> JobDefinition -> PreparedJob -> JobGraph -> ExecutionGraph -> JobResult
+JobSpec
+  -> JobDefinition
+  -> PreparedJob
+  -> JobGraph
+  -> ExecutionGraph
+  -> JobResult
 ```
 
-Bounded Source split discovery has its own role chain:
+Worker 控制面：
 
 ```text
-JobPlanner
-  -> SourceCoordinator
-     -> Source#createEnumerator(...)
-        -> SourceSplitEnumerator
+HTTP
+  -> JobApplication
+  -> JobApplicationService
+     -> JobExecutionState
+        -> Attempt #1 / #2 / ...
+     -> JobRuntimeScheduler
+     -> JobRepository
 ```
 
-Runtime responsibilities are separated independently:
+一次安全重试不会创建新 Job：
 
 ```text
-JobExecution
-  -> JobCoordinator
-     -> PipelineScheduler
-        -> PipelineExecutor
-           -> PipelineExecution
-              -> ExecutionCoordinator
-                 -> TaskExecutor
+job-100 / Attempt #1 FAILED
+          -> RetryPolicy: SAFE
+          -> Attempt #2 RUNNING
+          -> SUCCEEDED
 ```
 
-The standalone Worker control plane uses a separate application/domain/infrastructure boundary:
+`LOST`、`CANCELED`、存在已提交数据、存在 unknown commit state、缺少 commit evidence 时，默认拒绝重试。
 
-```text
-HTTP / registration
-    -> JobApplication
-       -> JobApplicationService
-          -> JobExecutionState
-             -> JobExecutionAttempt
-          -> application ports
-             -> LocalJobRuntimeScheduler / LocalJobExecutor / FileJobRepository
-```
+## 模块
 
-Worker control-plane checkpoints are durable by default. A stable Job identity owns execution attempts, while a local
-versioned checkpoint records lifecycle/idempotency/attempt state. On process restart, any persisted non-terminal Job is
-recovered deterministically as `LOST`; it is not automatically retried.
+| 模块 | 职责 |
+| --- | --- |
+| `link-up-api` | Connector 扩展契约和公共模型 |
+| `link-up-framework` | Planning、JobGraph、ExecutionGraph、本地执行运行时 |
+| `link-up-connectors` | JDBC / HTTP / Doris 等实现 |
+| `link-up-server` | Worker 控制面、REST、持久化、Attempt/Retry |
+| `link-up-launcher` | 本地命令行组合入口 |
+| `link-up-dist` | 分发包 |
+| `link-up-bom` | 依赖版本管理 |
 
-```text
-Job
-  -> Attempt #1
-      -> QUEUED -> RUNNING -> SUCCEEDED / FAILED / CANCELED / LOST
+## 构建
 
-state transition
-  -> JobRepository upsert
-      -> data/worker-state/<job>.job.json
-```
-
-Built-in connectors use the same role vocabulary for their internal structure:
-
-```text
-source / sink / catalog / client / config / converter / internal
-```
-
-Connector-specific role packages such as JDBC `dialect` and `split` are valid; new generic root packages such as
-`common`, `core`, `helper`, `misc`, and `utils` are not. The historical JDBC `core/{converter,dialect,split}` subtree is
-an explicit temporary migration allowlist and must not grow.
-
-`JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `SourceCoordinator` owns the
-framework side of Enumerator lifecycle/validation, while `JobPlanner` only builds topology from validated splits.
-`JobCoordinator` owns the framework run lifecycle, while Server `JobApplicationService` owns Worker submission/query/cancel
-use cases and delegates local threads/admission to `JobRuntimeScheduler`.
-
-See [architecture](docs/architecture.md),
-[ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md),
-[ADR-0002](docs/adr/0002-jobgraph-executiongraph.md),
-[ADR-0003](docs/adr/0003-runtime-role-separation.md),
-[ADR-0004](docs/adr/0004-source-enumerator-coordination.md),
-[ADR-0005](docs/adr/0005-connector-package-roles.md),
-[ADR-0006](docs/adr/0006-server-control-plane-boundaries.md),
-[ADR-0007](docs/adr/0007-worker-checkpoint-attempts.md), and the
-[connector development guide](docs/connector-development.md).
-
-## Quick start
-
-Build the complete project and its deployable archives with JDK 8+ and Maven 3.8.1+:
+要求 JDK 8+、Maven 3.8.1+：
 
 ```bash
 mvn --batch-mode clean verify
 ```
 
-Run directly from source:
+本地直接运行示例：
 
 ```bash
 mvn -pl link-up-launcher -am compile exec:java \
@@ -119,44 +73,40 @@ mvn -pl link-up-launcher -am compile exec:java \
   -Dexec.args=link-up-launcher/examples/jdbc-single-table.conf
 ```
 
-Or extract `link-up-dist/target/link-up-1.0.0.tar.gz`, copy and edit `config/link-up.yaml`, then run:
-
-```bash
-bin/link-up.sh --config config/link-up.yaml
-```
-
-The configuration file has a `.yaml` deployment-friendly name but uses HOCON syntax. Do not commit real JDBC
-credentials. See the [deployment and operations guide](docs/deployment.md) for packaging, CI, Docker, JVM options,
-Log4j2, security, rollback, and production guidance.
-
-## Offline Worker protocol
-
-`link-up-server` is a single-node, offline-only execution Worker. Its lifecycle is:
+Standalone Worker 默认把控制面 checkpoint 保存到：
 
 ```text
-CREATED -> SUBMITTED -> QUEUED -> RUNNING
-                                  -> SUCCEEDED / FAILED / CANCELED / LOST
+data/worker-state
 ```
 
-The JSON submit protocol supports control-plane `externalExecutionId`, `idempotencyKey`, definition versioning,
-auditable state transitions, Worker instance identity, execution-attempt history and deterministic duplicate submission
-handling. Checkpoints default to `data/worker-state`; use `--state-dir` to override the directory. The previous HOCON body
-submission remains available for CLI and compatibility use.
+可通过 `--state-dir` 指定独立持久化目录。
 
-See [the single-node offline Worker protocol](docs/worker-protocol.md) for the complete API and state ownership contract.
+## Worker API
 
-## Connector Schema
+常用接口：
 
-Link-Up exports Connector options, types, defaults, validation rules, semantic metadata and capabilities through a
-stable machine-readable schema:
-
-```http
-GET /api/v1/connectors
-GET /api/v1/connectors/{connectorId}/schema?role=SOURCE
-GET /api/v1/connectors/{connectorId}/schema?role=SINK
+```text
+POST   /api/v1/jobs
+GET    /api/v1/jobs/{jobId}
+GET    /api/v1/jobs/{jobId}/logs
+GET    /api/v1/jobs/{jobId}/metrics
+DELETE /api/v1/jobs/{jobId}
+POST   /api/v1/jobs/{jobId}/retry
+GET    /api/v1/connectors
+GET    /api/v1/node
 ```
 
-The schema is execution-focused and frontend-framework neutral. Yak Ops can cache it and combine it with its own
-Presentation Profile to produce a product-oriented form without duplicating Connector validation rules.
+Retry 请求必须重新携带与原 Job 完全一致的结构化提交内容。Worker 不会为了 Retry 把数据库密码、Token 或完整 JobSpec 写进 checkpoint。
 
-See [the Connector Schema protocol](docs/connector-schema.md) for the complete contract and phase-one boundaries.
+## 文档
+
+只保留对开发真正有用的几份：
+
+- [ARCHITECTURE.md](ARCHITECTURE.md)：系统边界和主流程。
+- [DOMAIN.md](DOMAIN.md)：Job、Attempt、Graph、状态语义。
+- [DEPENDENCIES.md](DEPENDENCIES.md)：模块依赖规则。
+- [REQUIREMENTS.md](REQUIREMENTS.md)：项目范围和非目标。
+- [CODE_STYLE.md](CODE_STYLE.md)：代码和包命名规范。
+- [REVIEW.md](REVIEW.md)：提交前检查清单。
+
+文档原则：**写当前事实，不写历史流水账；能用一张图说清，就不要写十页。**

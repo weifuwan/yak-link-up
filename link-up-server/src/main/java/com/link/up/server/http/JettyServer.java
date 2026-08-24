@@ -22,27 +22,21 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * 嵌入式 Jetty 生命周期和路由装配。
- */
-public final class JettyServer
-        implements AutoCloseable {
+/** Embedded Jetty lifecycle and route composition. */
+public final class JettyServer implements AutoCloseable {
 
     private final Server server;
     private final ServerConnector connector;
-    private final AtomicBoolean closed =
-            new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public JettyServer(
             FluxServerConfig config,
             JobRestService jobService) {
-
         this(
                 config,
                 jobService,
                 new ConnectorRestService(
-                        new ConnectorSchemaCatalog(
-                                Collections.emptyList())));
+                        new ConnectorSchemaCatalog(Collections.emptyList())));
     }
 
     public JettyServer(
@@ -50,87 +44,55 @@ public final class JettyServer
             JobRestService jobService,
             ConnectorRestService connectorService) {
 
-        int minimumThreads =
-                Math.min(
-                        4,
-                        config.getHttpThreads());
+        int minimumThreads = Math.min(4, config.getHttpThreads());
+        QueuedThreadPool threadPool = new QueuedThreadPool(
+                config.getHttpThreads(),
+                minimumThreads,
+                60_000);
+        threadPool.setName("link-up-http");
 
-        QueuedThreadPool threadPool =
-                new QueuedThreadPool(
-                        config.getHttpThreads(),
-                        minimumThreads,
-                        60_000);
+        this.server = new Server(threadPool);
+        this.server.setStopTimeout(config.getShutdownTimeoutMillis());
 
-        threadPool.setName(
-                "link-up-http");
+        this.connector = new ServerConnector(server);
+        connector.setHost(config.getHost());
+        connector.setPort(config.getPort());
+        connector.setIdleTimeout(30_000L);
+        connector.setAcceptQueueSize(128);
+        server.addConnector(connector);
 
-        this.server =
-                new Server(threadPool);
-
-        this.server.setStopTimeout(
-                config.getShutdownTimeoutMillis());
-
-        this.connector =
-                new ServerConnector(server);
-
-        connector.setHost(
-                config.getHost());
-        connector.setPort(
-                config.getPort());
-        connector.setIdleTimeout(
-                30_000L);
-        connector.setAcceptQueueSize(
-                128);
-
-        server.addConnector(
-                connector);
-
-        ServletContextHandler context =
-                new ServletContextHandler(
-                        ServletContextHandler.NO_SESSIONS);
-
+        ServletContextHandler context = new ServletContextHandler(
+                ServletContextHandler.NO_SESSIONS);
         context.setContextPath("/");
 
         context.addFilter(
-                new FilterHolder(
-                        new ExceptionHandlingFilter()),
+                new FilterHolder(new ExceptionHandlingFilter()),
                 "/*",
-                EnumSet.of(
-                        DispatcherType.REQUEST));
+                EnumSet.of(DispatcherType.REQUEST));
 
         context.addServlet(
-                new ServletHolder(
-                        new HealthServlet()),
+                new ServletHolder(new HealthServlet()),
                 RestConstants.HEALTH);
-
         context.addServlet(
-                new ServletHolder(
-                        new NodeServlet(
-                                jobService)),
+                new ServletHolder(new NodeServlet(jobService)),
                 RestConstants.NODE);
-
         context.addServlet(
-                new ServletHolder(
-                        new ConnectorsServlet(
-                                connectorService)),
+                new ServletHolder(new ConnectorsServlet(connectorService)),
                 RestConstants.CONNECTORS + "/*");
-
         context.addServlet(
                 new ServletHolder(
                         new JobsServlet(
                                 jobService,
                                 config.getMaxRequestBytes())),
                 RestConstants.JOBS);
-
         context.addServlet(
                 new ServletHolder(
                         new JobResourceServlet(
-                                jobService)),
+                                jobService,
+                                config.getMaxRequestBytes())),
                 RestConstants.JOBS + "/*");
-
         context.addServlet(
-                new ServletHolder(
-                        new NotFoundServlet()),
+                new ServletHolder(new NotFoundServlet()),
                 "/");
 
         server.setHandler(context);
@@ -140,8 +102,7 @@ public final class JettyServer
         server.start();
     }
 
-    public void join()
-            throws InterruptedException {
+    public void join() throws InterruptedException {
         server.join();
     }
 
@@ -154,9 +115,7 @@ public final class JettyServer
     }
 
     public void stop() throws Exception {
-        if (closed.compareAndSet(
-                false,
-                true)) {
+        if (closed.compareAndSet(false, true)) {
             server.stop();
         }
     }
