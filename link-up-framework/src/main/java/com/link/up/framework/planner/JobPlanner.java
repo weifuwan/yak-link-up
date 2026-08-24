@@ -7,17 +7,24 @@ import com.link.up.framework.connector.PreparedJob;
 import com.link.up.framework.connector.PreparedSink;
 import com.link.up.framework.connector.PreparedSource;
 import com.link.up.framework.execution.TaskId;
-import com.link.up.framework.execution.split.LocalSplitQueue;
-import com.link.up.framework.execution.split.SplitProvider;
+import com.link.up.framework.execution.TaskType;
 import com.link.up.framework.job.ExecutionConfig;
-import com.link.up.framework.job.SplitAssignmentMode;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
- * 按 SourceSplit.dataSetId 构建独立 Pipeline 的计划生成器。
+ * Builds an immutable {@link JobGraph} grouped by SourceSplit.dataSetId.
+ *
+ * <p>The planner calculates topology and split assignment only. Runtime
+ * ownership objects such as split queues are created later by the execution
+ * layer.
  */
 public final class JobPlanner {
+
     private final SplitAssigner splitAssigner;
 
     public JobPlanner() {
@@ -25,22 +32,45 @@ public final class JobPlanner {
     }
 
     public JobPlanner(SplitAssigner splitAssigner) {
-        this.splitAssigner = Objects.requireNonNull(splitAssigner, "splitAssigner must not be null");
+        this.splitAssigner = Objects.requireNonNull(
+                splitAssigner,
+                "splitAssigner must not be null");
     }
 
-    public ExecutionPlan plan(PreparedJob preparedJob) throws Exception {
-        return createPlan(Objects.requireNonNull(preparedJob, "preparedJob must not be null"), preparedJob.getSource());
+    public JobGraph plan(PreparedJob preparedJob) throws Exception {
+        PreparedJob job = Objects.requireNonNull(
+                preparedJob,
+                "preparedJob must not be null");
+        return createGraph(job, job.getSource());
     }
 
-    private <SplitT extends SourceSplit> ExecutionPlan createPlan(PreparedJob job, PreparedSource<SplitT> preparedSource) throws Exception {
+    private <SplitT extends SourceSplit> JobGraph createGraph(
+            PreparedJob job,
+            PreparedSource<SplitT> preparedSource)
+            throws Exception {
+
         ExecutionConfig config = job.getExecutionConfig();
-        List<SplitT> splits = preparedSource.getSource().createSplits(preparedSource.getTables(), config.getSourceParallelism());
-        if (splits == null) throw new IllegalStateException("Source returned null splits");
-        Map<String, List<SplitT>> byDataSet = new LinkedHashMap<String, List<SplitT>>();
+        List<SplitT> splits = preparedSource
+                .getSource()
+                .createSplits(
+                        preparedSource.getTables(),
+                        config.getSourceParallelism());
+
+        if (splits == null) {
+            throw new IllegalStateException(
+                    "Source returned null splits");
+        }
+
+        Map<String, List<SplitT>> byDataSet =
+                new LinkedHashMap<String, List<SplitT>>();
+
         for (SplitT split : splits) {
             String id = split.dataSetId();
-            if (id == null || id.trim().isEmpty())
-                throw new IllegalStateException("SourceSplit dataSetId must not be blank");
+            if (id == null || id.trim().isEmpty()) {
+                throw new IllegalStateException(
+                        "SourceSplit dataSetId must not be blank");
+            }
+
             List<SplitT> group = byDataSet.get(id);
             if (group == null) {
                 group = new ArrayList<SplitT>();
@@ -48,25 +78,80 @@ public final class JobPlanner {
             }
             group.add(split);
         }
-        List<PipelinePlan> pipelines = new ArrayList<PipelinePlan>();
-        for (Map.Entry<String, List<SplitT>> entry : byDataSet.entrySet()) {
+
+        List<PipelineGraph<?>> pipelines =
+                new ArrayList<PipelineGraph<?>>();
+
+        for (Map.Entry<String, List<SplitT>> entry :
+                byDataSet.entrySet()) {
+
             String dataSetId = entry.getKey();
             TablePath path = TablePath.parse(dataSetId);
-            CatalogTable table = preparedSource.getOutputTables().get(path);
-            if (table == null) throw new IllegalStateException("No output catalog table for data set: " + dataSetId);
-            List<List<SplitT>> assignments = splitAssigner.assign(entry.getValue(), config.getSourceParallelism());
-            SplitProvider<SplitT> provider = config.getSplitAssignmentMode() == SplitAssignmentMode.DYNAMIC ? new LocalSplitQueue<SplitT>(entry.getValue()) : null;
+            CatalogTable table =
+                    preparedSource.getOutputTables().get(path);
+
+            if (table == null) {
+                throw new IllegalStateException(
+                        "No output catalog table for data set: "
+                                + dataSetId);
+            }
+
+            List<List<SplitT>> assignments =
+                    splitAssigner.assign(
+                            entry.getValue(),
+                            config.getSourceParallelism());
+
             String pipelineId = "pipeline-" + dataSetId;
-            List<SourceTaskPlan<?>> sources = new ArrayList<SourceTaskPlan<?>>();
-            for (int i = 0; i < assignments.size(); i++)
-                sources.add(new SourceTaskPlan<SplitT>(new TaskId(pipelineId, com.link.up.framework.execution.TaskType.SOURCE, i, assignments.size()), preparedSource, assignments.get(i), config.getBatchSize(), provider));
+            List<SourceTaskPlan<SplitT>> sources =
+                    new ArrayList<SourceTaskPlan<SplitT>>();
+
+            for (int i = 0; i < assignments.size(); i++) {
+                sources.add(
+                        new SourceTaskPlan<SplitT>(
+                                new TaskId(
+                                        pipelineId,
+                                        TaskType.SOURCE,
+                                        i,
+                                        assignments.size()),
+                                preparedSource,
+                                assignments.get(i),
+                                config.getBatchSize()));
+            }
+
             List<PreparedSink> sinks = job.getSinks(dataSetId);
-            int sinkCount = Math.min(Math.min(config.getSinkParallelism(), sinks.size()), Math.max(1, entry.getValue().size()));
-            List<SinkTaskPlan> sinkPlans = new ArrayList<SinkTaskPlan>();
-            for (int i = 0; i < sinkCount; i++)
-                sinkPlans.add(new SinkTaskPlan(new TaskId(pipelineId, com.link.up.framework.execution.TaskType.SINK, i, sinkCount), sinks.get(i)));
-            pipelines.add(new PipelinePlan(pipelineId, dataSetId, table, sources, sinkPlans));
+            int sinkCount = Math.min(
+                    Math.min(
+                            config.getSinkParallelism(),
+                            sinks.size()),
+                    Math.max(1, entry.getValue().size()));
+
+            List<SinkTaskPlan> sinkPlans =
+                    new ArrayList<SinkTaskPlan>();
+
+            for (int i = 0; i < sinkCount; i++) {
+                sinkPlans.add(
+                        new SinkTaskPlan(
+                                new TaskId(
+                                        pipelineId,
+                                        TaskType.SINK,
+                                        i,
+                                        sinkCount),
+                                sinks.get(i)));
+            }
+
+            pipelines.add(
+                    new PipelineGraph<SplitT>(
+                            pipelineId,
+                            dataSetId,
+                            table,
+                            sources,
+                            sinkPlans,
+                            config.getSplitAssignmentMode()));
         }
-        return new ExecutionPlan(job.getJobName(), config, pipelines);
+
+        return new JobGraph(
+                job.getJobName(),
+                config,
+                pipelines);
     }
 }
