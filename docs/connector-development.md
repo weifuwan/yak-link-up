@@ -17,7 +17,7 @@ com.link.up.connector.<name>
 ├── source
 │   ├── <Name>Source.java
 │   ├── <Name>SourceSplit.java
-│   ├── <Name>SplitEnumerator.java
+│   ├── <Name>SourceSplitEnumerator.java
 │   └── <Name>SourceReader.java
 ├── sink
 │   ├── <Name>SinkWriter.java
@@ -52,17 +52,49 @@ Factory classes must not schedule tasks or create framework runtime objects.
 
 ### Source
 
-A source describes how readers and splits are created. Keep external I/O in reader/enumerator/client roles rather than in
-configuration objects.
+A Source is the immutable connector-level description used to create two per-execution roles:
+
+- `SourceSplitEnumerator`: discovers/calculates bounded units of work;
+- `SourceReader`: reads already-assigned splits and owns reader-side resources.
+
+New connectors should implement:
+
+```text
+Source#createEnumerator(preparedTables, SourceEnumeratorContext)
+Source#createReader(preparedTables, batchSize)
+```
 
 Use these concepts consistently:
 
 - `SourceSplit`: one independently readable unit of work;
-- `SourceReader`: owns the resource used to read assigned splits and is not shared between task threads;
-- `SplitEnumerator`: discovers or calculates splits when the connector needs a dedicated planning role.
+- `SourceSplitEnumerator`: owns split discovery/planning for one framework planning attempt;
+- `SourceEnumeratorContext`: supplies framework planning inputs such as source parallelism;
+- `SourceReader`: owns the resource used to read assigned splits and is not shared between task threads.
 
-The current runtime still supports `Source#createSplits(...)`; do not invent a connector-local execution framework around
-that compatibility method.
+The framework creates and closes the Enumerator through its `SourceCoordinator`. Connector code must not create
+framework coordinators, task plans, split queues, or executor services.
+
+#### Legacy `createSplits(...)` compatibility
+
+The `Source#createSplits(...)` overloads are deprecated compatibility hooks. Existing connectors may keep them while they
+migrate: the default `Source#createEnumerator(...)` adapts those methods automatically.
+
+New connectors should not implement split discovery only through `createSplits(...)`. Override `createEnumerator(...)`
+instead so split lifecycle, classloader scope, and validation flow through the canonical framework path.
+
+JDBC is the reference native implementation: `JdbcSource` creates `JdbcSourceSplitEnumerator`, while its old
+`createSplits(...)` methods delegate back through that Enumerator path.
+
+#### Split contract
+
+An Enumerator may return an empty list for an empty bounded source. Non-empty results must contain:
+
+- no null splits;
+- a non-blank `splitId`;
+- a non-blank `dataSetId`;
+- no duplicate `splitId` within the same `dataSetId`.
+
+Keep split objects immutable/serializable and do not attach open database/network resources to them.
 
 ### Sink
 
@@ -108,7 +140,7 @@ utils
 
 A narrowly named utility tied to one role is acceptable, but a growing generic utility package is a signal that domain
 roles need to be extracted. Existing JDBC `core`/`utils` packages are transitional and should be migrated when related
-code is substantially changed; Phase 1 does not move them solely for cosmetics.
+code is substantially changed; do not move them solely for cosmetics.
 
 ## ServiceLoader registration
 
@@ -128,12 +160,12 @@ At minimum, a connector should test the responsibilities it owns:
 
 - option/config validation;
 - schema/type conversion for supported types;
-- split planning when applicable;
+- Enumerator split planning, including parallelism-sensitive behavior when applicable;
 - reader/writer lifecycle and error handling;
 - factory discovery/schema export;
 - database-specific behavior using a lightweight integration fixture when practical.
 
-Framework task scheduling and channel behavior belong to framework tests, not connector tests.
+Framework Source coordination, task scheduling, and channel behavior belong to framework tests, not connector tests.
 
 ## Review checklist
 
@@ -141,7 +173,9 @@ Before merging a connector change, verify:
 
 - no `com.link.up.framework.*` import exists in the connector;
 - each new class has one obvious runtime role;
-- source and sink resources are owned by reader/writer/preparer roles;
-- no second factory registry, executor, thread pool, or job lifecycle is introduced;
+- new Sources implement `createEnumerator(...)` instead of introducing another split-planning entry point;
+- Enumerator results follow the split identity contract;
+- source and sink resources are owned by enumerator/reader/writer/preparer roles;
+- no second factory registry, coordinator, executor, thread pool, or job lifecycle is introduced;
 - configuration validation stays close to connector option contracts;
 - new packages follow role names rather than generic technical buckets.

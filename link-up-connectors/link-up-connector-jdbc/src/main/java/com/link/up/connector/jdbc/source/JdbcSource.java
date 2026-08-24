@@ -1,7 +1,9 @@
 package com.link.up.connector.jdbc.source;
 
 import com.link.up.api.source.Source;
+import com.link.up.api.source.SourceEnumeratorContext;
 import com.link.up.api.source.SourceReader;
+import com.link.up.api.source.SourceSplitEnumerator;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.type.FluxRow;
@@ -19,7 +21,8 @@ import java.util.Objects;
 /**
  * JDBC 离线 Source。
  * <p>
- * Source 本身只保存不可变配置，不直接持有 JDBC 连接。
+ * Source 本身只保存不可变配置，不直接持有 JDBC 连接。Split discovery
+ * is delegated to a per-planning {@link SourceSplitEnumerator}.
  */
 public final class JdbcSource
         implements Source<JdbcSourceSplit> {
@@ -38,6 +41,26 @@ public final class JdbcSource
     }
 
     @Override
+    public SourceSplitEnumerator<JdbcSourceSplit> createEnumerator(
+            Map<TablePath, CatalogTable> tables,
+            SourceEnumeratorContext context)
+            throws Exception {
+
+        Objects.requireNonNull(
+                context,
+                "context must not be null");
+
+        return JdbcSourceSplitGenerator.createEnumerator(
+                config,
+                tables,
+                context.getParallelism());
+    }
+
+    /**
+     * Compatibility bridge for callers that still invoke the legacy Source API.
+     */
+    @Override
+    @Deprecated
     public List<JdbcSourceSplit> createSplits(
             Map<TablePath, CatalogTable> tables)
             throws Exception {
@@ -71,23 +94,22 @@ public final class JdbcSource
         }
     }
 
+    /**
+     * Compatibility bridge for callers that still invoke the legacy Source API.
+     */
     @Override
+    @Deprecated
     public List<JdbcSourceSplit> createSplits(
             Map<TablePath, CatalogTable> tables,
             int parallelism)
             throws Exception {
 
-        /*
-         * 这里替换成你现有的分片生成器。
-         *
-         * 例如：
-         * return new JdbcSourceSplitEnumerator(config, tables)
-         *         .enumerateSplits();
-         */
-        return JdbcSourceSplitGenerator.generate(
-                config,
-                tables,
-                parallelism);
+        try (SourceSplitEnumerator<JdbcSourceSplit> enumerator =
+                     createEnumerator(
+                             tables,
+                             new SourceEnumeratorContext(parallelism))) {
+            return enumerator.enumerateSplits();
+        }
     }
 
     @Override
