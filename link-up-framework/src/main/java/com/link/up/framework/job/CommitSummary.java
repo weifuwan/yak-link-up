@@ -5,38 +5,96 @@ import com.link.up.api.sink.CommitScope;
 import java.util.Objects;
 
 /**
- * Immutable distinction between task-local transactions and confirmed data commits.
+ * Immutable summary of task-local sink commit observations.
  */
 public final class CommitSummary {
-    private final int totalTaskCount, finishedTaskCount, committedTaskCount, emptyCommittedTaskCount, failedOrUncommittedTaskCount;
-    private final long attemptedRecordCount, successfullyWrittenRecordCount, successfullyCommittedRecordCount, failedRecordCount, unknownStateRecordCount;
+
+    private final int totalTaskCount;
+    private final int finishedTaskCount;
+    private final int committedTaskCount;
+    private final int emptyCommittedTaskCount;
+    private final int failedOrUncommittedTaskCount;
+
+    private final long attemptedRecordCount;
+    private final long successfullyWrittenRecordCount;
+    private final long successfullyCommittedRecordCount;
+    private final long failedRecordCount;
+    private final long unknownStateRecordCount;
+
     private final CommitScope commitScope;
     private final String retryAdvice;
 
-    public CommitSummary(int total, int finished, int committed, int empty, int failed, long attempted, long written, long committedRecords, long failedRecords, long unknown, CommitScope scope, String advice) {
-        totalTaskCount = total;
-        finishedTaskCount = finished;
-        committedTaskCount = committed;
-        emptyCommittedTaskCount = empty;
-        failedOrUncommittedTaskCount = failed;
-        attemptedRecordCount = attempted;
-        successfullyWrittenRecordCount = written;
-        successfullyCommittedRecordCount = committedRecords;
-        failedRecordCount = failedRecords;
-        unknownStateRecordCount = unknown;
-        commitScope = Objects.requireNonNull(scope, "commitScope");
-        retryAdvice = Objects.requireNonNull(advice, "retryAdvice");
+    public CommitSummary(
+            int total,
+            int finished,
+            int committed,
+            int empty,
+            int failed,
+            long attempted,
+            long written,
+            long committedRecords,
+            long failedRecords,
+            long unknown,
+            CommitScope scope,
+            String advice) {
+
+        this.totalTaskCount = total;
+        this.finishedTaskCount = finished;
+        this.committedTaskCount = committed;
+        this.emptyCommittedTaskCount = empty;
+        this.failedOrUncommittedTaskCount = failed;
+        this.attemptedRecordCount = attempted;
+        this.successfullyWrittenRecordCount = written;
+        this.successfullyCommittedRecordCount = committedRecords;
+        this.failedRecordCount = failedRecords;
+        this.unknownStateRecordCount = unknown;
+        this.commitScope = Objects.requireNonNull(
+                scope,
+                "commitScope");
+        this.retryAdvice = Objects.requireNonNull(
+                advice,
+                "retryAdvice");
     }
 
     /**
-     * Compatibility constructor: committed tasks are conservatively treated as empty.
+     * Compatibility constructor: committed tasks are conservatively treated as
+     * empty commits because record-level evidence is unavailable.
      */
-    public CommitSummary(int committed, int failed, CommitScope scope, String advice) {
-        this(committed + failed, committed, committed, committed, failed, 0, 0, 0, 0, 0, scope, advice);
+    public CommitSummary(
+            int committed,
+            int failed,
+            CommitScope scope,
+            String advice) {
+
+        this(
+                committed + failed,
+                committed,
+                committed,
+                committed,
+                failed,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                scope,
+                advice);
     }
 
     public static CommitSummary empty() {
-        return new CommitSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, CommitScope.TASK_LOCAL, "No sink tasks were executed.");
+        return new CommitSummary(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                CommitScope.TASK_LOCAL,
+                "No sink tasks were executed.");
     }
 
     public int getTotalTaskCount() {
@@ -56,7 +114,8 @@ public final class CommitSummary {
     }
 
     public int getDataCommittedTaskCount() {
-        return committedTaskCount - emptyCommittedTaskCount;
+        return committedTaskCount
+                - emptyCommittedTaskCount;
     }
 
     public int getFailedOrUncommittedTaskCount() {
@@ -84,11 +143,13 @@ public final class CommitSummary {
     }
 
     public boolean isPartialTaskCommit() {
-        return committedTaskCount > 0 && failedOrUncommittedTaskCount > 0;
+        return committedTaskCount > 0
+                && failedOrUncommittedTaskCount > 0;
     }
 
     public boolean isPartialDataCommit() {
-        return successfullyCommittedRecordCount > 0 && failedOrUncommittedTaskCount > 0;
+        return successfullyCommittedRecordCount > 0
+                && failedOrUncommittedTaskCount > 0;
     }
 
     public boolean isPartialCommit() {
@@ -104,6 +165,10 @@ public final class CommitSummary {
     }
 
     public String getWarning() {
-        return isPartialDataCommit() ? "Partial data commit detected; task-local commits cannot be rolled back globally." : "";
+        if (!isPartialDataCommit()) {
+            return "";
+        }
+
+        return "Partial data commit detected; task-local commits cannot be rolled back globally.";
     }
 }

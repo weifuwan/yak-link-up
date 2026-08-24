@@ -9,9 +9,7 @@ import java.lang.reflect.Modifier;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/**
- * Architecture guards for the planner/runtime boundary.
- */
+/** Architecture guards for the planner/runtime boundary. */
 public class PlannerBoundaryTest {
 
     private static final Class<?>[] PLANNER_MODELS = {
@@ -19,6 +17,12 @@ public class PlannerBoundaryTest {
             PipelineGraph.class,
             SourceTaskPlan.class,
             SinkTaskPlan.class
+    };
+
+    private static final Class<?>[] PLANNER_SERVICES = {
+            JobPlanner.class,
+            PipelinePlanner.class,
+            DataSetSplitGrouper.class
     };
 
     private static final String[] FORBIDDEN_RUNTIME_TYPES = {
@@ -32,21 +36,12 @@ public class PlannerBoundaryTest {
 
     @Test
     public void plannerModelsMustNotOwnRuntimeState() {
-        for (Class<?> model : PLANNER_MODELS) {
-            for (Field field : model.getDeclaredFields()) {
-                String typeName = field.getGenericType().getTypeName();
+        assertNoRuntimeFields(PLANNER_MODELS);
+    }
 
-                for (String forbidden : FORBIDDEN_RUNTIME_TYPES) {
-                    assertFalse(
-                            model.getSimpleName()
-                                    + "."
-                                    + field.getName()
-                                    + " must not reference runtime ownership type "
-                                    + forbidden,
-                            typeName.contains(forbidden));
-                }
-            }
-        }
+    @Test
+    public void plannerServicesMustNotOwnRuntimeState() {
+        assertNoRuntimeFields(PLANNER_SERVICES);
     }
 
     @Test
@@ -58,29 +53,64 @@ public class PlannerBoundaryTest {
                                 + "."
                                 + field.getName()
                                 + " must be final",
-                        Modifier.isFinal(field.getModifiers()));
+                        Modifier.isFinal(
+                                field.getModifiers()));
             }
         }
     }
 
     @Test
-    public void jobPlannerMustDelegateSourceDiscoveryToSourceCoordinator() {
+    public void jobPlannerMustDelegateDiscoveryAndPipelinePlanning() {
         boolean foundSourceCoordinator = false;
+        boolean foundPipelinePlanner = false;
 
         for (Field field : JobPlanner.class.getDeclaredFields()) {
-            if (SourceCoordinator.class.isAssignableFrom(field.getType())) {
+            if (SourceCoordinator.class.isAssignableFrom(
+                    field.getType())) {
                 foundSourceCoordinator = true;
             }
 
-            String typeName = field.getGenericType().getTypeName();
+            if (PipelinePlanner.class.isAssignableFrom(
+                    field.getType())) {
+                foundPipelinePlanner = true;
+            }
+
             assertFalse(
                     "JobPlanner must not own SourceSplitEnumerator directly",
-                    typeName.contains(
-                            "com.link.up.api.source.SourceSplitEnumerator"));
+                    field.getGenericType()
+                            .getTypeName()
+                            .contains(
+                                    "com.link.up.api.source.SourceSplitEnumerator"));
         }
 
         assertTrue(
                 "JobPlanner must delegate split discovery to SourceCoordinator",
                 foundSourceCoordinator);
+        assertTrue(
+                "JobPlanner must delegate per-data-set planning to PipelinePlanner",
+                foundPipelinePlanner);
+    }
+
+    private static void assertNoRuntimeFields(
+            Class<?>[] types) {
+
+        for (Class<?> type : types) {
+            for (Field field : type.getDeclaredFields()) {
+                String typeName =
+                        field.getGenericType()
+                                .getTypeName();
+
+                for (String forbidden :
+                        FORBIDDEN_RUNTIME_TYPES) {
+                    assertFalse(
+                            type.getSimpleName()
+                                    + "."
+                                    + field.getName()
+                                    + " must not reference runtime ownership type "
+                                    + forbidden,
+                            typeName.contains(forbidden));
+                }
+            }
+        }
     }
 }

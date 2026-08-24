@@ -1,7 +1,6 @@
 package com.link.up.framework.execution;
 
 import com.link.up.framework.execution.task.ExecutionTask;
-import com.link.up.framework.execution.task.SinkTask;
 import com.link.up.framework.job.CommitSummary;
 import com.link.up.framework.metrics.JobMetrics;
 import com.link.up.framework.metrics.TaskMetrics;
@@ -14,28 +13,19 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
 /**
- * Job Task 协调器。
+ * Coordinates local task execution for one pipeline.
  *
- * <p>任意一个 Task 失败时：
- *
- * <ol>
- *     <li>设置全局取消标记</li>
- *     <li>关闭或失败所有 Channel</li>
- *     <li>取消其他 Task</li>
- *     <li>中断执行线程</li>
- * </ol>
+ * <p>Sink tasks are submitted before source tasks. The first task failure
+ * cancels the shared runtime and interrupts outstanding tasks.</p>
  */
 public final class ExecutionCoordinator {
 
     private final TaskExecutor taskExecutor;
-
     private final CancellationToken cancellationToken;
-
     private final JobMetrics jobMetrics;
-
     private final ClassLoader classLoader;
-
     private final Runnable cancellationHook;
+    private final SinkCommitSummaryCollector commitSummaryCollector;
 
     public ExecutionCoordinator(
             TaskExecutor taskExecutor,
@@ -44,30 +34,23 @@ public final class ExecutionCoordinator {
             ClassLoader classLoader,
             Runnable cancellationHook) {
 
-        this.taskExecutor =
-                Objects.requireNonNull(
-                        taskExecutor,
-                        "taskExecutor must not be null");
-
-        this.cancellationToken =
-                Objects.requireNonNull(
-                        cancellationToken,
-                        "cancellationToken must not be null");
-
-        this.jobMetrics =
-                Objects.requireNonNull(
-                        jobMetrics,
-                        "jobMetrics must not be null");
-
-        this.classLoader =
-                Objects.requireNonNull(
-                        classLoader,
-                        "classLoader must not be null");
-
-        this.cancellationHook =
-                Objects.requireNonNull(
-                        cancellationHook,
-                        "cancellationHook must not be null");
+        this.taskExecutor = Objects.requireNonNull(
+                taskExecutor,
+                "taskExecutor must not be null");
+        this.cancellationToken = Objects.requireNonNull(
+                cancellationToken,
+                "cancellationToken must not be null");
+        this.jobMetrics = Objects.requireNonNull(
+                jobMetrics,
+                "jobMetrics must not be null");
+        this.classLoader = Objects.requireNonNull(
+                classLoader,
+                "classLoader must not be null");
+        this.cancellationHook = Objects.requireNonNull(
+                cancellationHook,
+                "cancellationHook must not be null");
+        this.commitSummaryCollector =
+                new SinkCommitSummaryCollector(jobMetrics);
     }
 
     public ExecutionOutcome execute(
@@ -77,133 +60,133 @@ public final class ExecutionCoordinator {
         Objects.requireNonNull(
                 sinkTasks,
                 "sinkTasks must not be null");
-
         Objects.requireNonNull(
                 sourceTasks,
                 "sourceTasks must not be null");
 
-        List<ExecutionTask> allTasks =
-                new ArrayList<ExecutionTask>();
+        List<ExecutionTask> orderedTasks =
+                orderedTasks(sinkTasks, sourceTasks);
 
-        /*
-         * 先启动 Sink，让消费者优先进入等待状态。
-         */
-        allTasks.addAll(sinkTasks);
-        allTasks.addAll(sourceTasks);
-
-        if (allTasks.isEmpty()) {
-            return new ExecutionOutcome(null, CommitSummary.empty());
+        if (orderedTasks.isEmpty()) {
+            return new ExecutionOutcome(
+                    null,
+                    CommitSummary.empty());
         }
 
         List<Future<TaskResult>> futures =
                 new ArrayList<Future<TaskResult>>(
-                        allTasks.size());
+                        orderedTasks.size());
 
         Throwable firstFailure = null;
 
         try {
-            for (ExecutionTask task : allTasks) {
-                TaskMetrics metrics =
-                        jobMetrics.registerTask(
-                                task.getTaskId());
-
-                TaskContext context =
-                        new TaskContext(
-                                task.getTaskId(),
-                                cancellationToken,
-                                metrics,
-                                classLoader);
-
-                futures.add(
-                        taskExecutor.submit(
-                                task,
-                                context));
-            }
-
-            for (int i = 0; i < allTasks.size(); i++) {
-                Future<TaskResult> completed =
-                        taskExecutor.takeCompleted();
-
-                try {
-                    TaskResult result =
-                            completed.get();
-
-                    if (result.isFailed()
-                            && firstFailure == null) {
-
-                        firstFailure =
-                                result.getFailure();
-
-                        cancelAll(
-                                allTasks,
-                                futures,
-                                firstFailure);
-                    }
-
-                } catch (CancellationException ignored) {
-                    // 由其他 Task 失败触发的取消。
-
-                } catch (ExecutionException exception) {
-                    if (firstFailure == null) {
-                        firstFailure =
-                                exception.getCause() == null
-                                        ? exception
-                                        : exception.getCause();
-
-                        cancelAll(
-                                allTasks,
-                                futures,
-                                firstFailure);
-                    }
-                }
-            }
-
+            submit(orderedTasks, futures);
+            firstFailure =
+                    awaitCompletion(
+                            orderedTasks,
+                            futures);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-
             firstFailure = interrupted;
-
             cancelAll(
-                    allTasks,
+                    orderedTasks,
                     futures,
                     interrupted);
-
-        } catch (Throwable throwable) {
-            firstFailure = throwable;
-
+        } catch (Throwable failure) {
+            firstFailure = failure;
             cancelAll(
-                    allTasks,
+                    orderedTasks,
                     futures,
-                    throwable);
+                    failure);
         }
 
-        return new ExecutionOutcome(firstFailure, summarizeCommits(sinkTasks));
+        return new ExecutionOutcome(
+                firstFailure,
+                commitSummaryCollector.collect(sinkTasks));
     }
 
-    private CommitSummary summarizeCommits(List<ExecutionTask> sinkTasks) {
-        int committed = 0, empty = 0, finished = 0;
-        long attempted = 0, written = 0, unknown = 0, failed = 0;
-        String retryAdvice = "This sink commits per task; verify already committed targets before retrying.";
-        com.link.up.api.sink.CommitScope scope = com.link.up.api.sink.CommitScope.TASK_LOCAL;
-        for (ExecutionTask task : sinkTasks)
-            if (task instanceof SinkTask) {
-                SinkTask sink = (SinkTask) task;
-                TaskMetrics m = jobMetrics.getTaskMetrics().get(sink.getTaskId());
-                long successful = m == null ? 0 : m.getSinkWriteSuccessRecordCount();
-                attempted += m == null ? 0 : m.getAttemptedRecordCount();
-                written += successful;
-                unknown += m == null ? 0 : m.getUnknownStateRecordCount();
-                failed += m == null ? 0 : m.getFailedRecordCount();
-                if (m != null && m.getState() == TaskState.FINISHED) finished++;
-                if (sink.isCommitted()) {
-                    committed++;
-                    if (successful == 0) empty++;
+    private List<ExecutionTask> orderedTasks(
+            List<ExecutionTask> sinkTasks,
+            List<ExecutionTask> sourceTasks) {
+
+        List<ExecutionTask> tasks =
+                new ArrayList<ExecutionTask>(
+                        sinkTasks.size()
+                                + sourceTasks.size());
+
+        tasks.addAll(sinkTasks);
+        tasks.addAll(sourceTasks);
+        return tasks;
+    }
+
+    private void submit(
+            List<ExecutionTask> tasks,
+            List<Future<TaskResult>> futures) {
+
+        for (ExecutionTask task : tasks) {
+            TaskMetrics metrics =
+                    jobMetrics.registerTask(
+                            task.getTaskId());
+
+            TaskContext context =
+                    new TaskContext(
+                            task.getTaskId(),
+                            cancellationToken,
+                            metrics,
+                            classLoader);
+
+            futures.add(
+                    taskExecutor.submit(
+                            task,
+                            context));
+        }
+    }
+
+    private Throwable awaitCompletion(
+            List<ExecutionTask> tasks,
+            List<Future<TaskResult>> futures)
+            throws InterruptedException {
+
+        Throwable firstFailure = null;
+
+        for (int index = 0;
+             index < tasks.size();
+             index++) {
+
+            Future<TaskResult> completed =
+                    taskExecutor.takeCompleted();
+
+            try {
+                TaskResult result = completed.get();
+
+                if (result.isFailed()
+                        && firstFailure == null) {
+                    firstFailure = result.getFailure();
+                    cancelAll(
+                            tasks,
+                            futures,
+                            firstFailure);
                 }
-                scope = sink.getCommitScope();
-                retryAdvice = sink.getRetryAdvice();
+            } catch (CancellationException ignored) {
+                // Cancellation was already initiated by another task.
+            } catch (ExecutionException executionFailure) {
+                if (firstFailure != null) {
+                    continue;
+                }
+
+                firstFailure =
+                        executionFailure.getCause() == null
+                                ? executionFailure
+                                : executionFailure.getCause();
+
+                cancelAll(
+                        tasks,
+                        futures,
+                        firstFailure);
             }
-        return new CommitSummary(sinkTasks.size(), finished, committed, empty, sinkTasks.size() - committed,
-                attempted, written, committed == 0 ? 0 : written, failed, unknown, scope, retryAdvice);
+        }
+
+        return firstFailure;
     }
 
     private void cancelAll(
@@ -216,16 +199,14 @@ public final class ExecutionCoordinator {
         try {
             cancellationHook.run();
         } catch (Throwable hookFailure) {
-            cause.addSuppressed(
-                    hookFailure);
+            cause.addSuppressed(hookFailure);
         }
 
         for (ExecutionTask task : tasks) {
             try {
                 task.cancel();
             } catch (Throwable cancelFailure) {
-                cause.addSuppressed(
-                        cancelFailure);
+                cause.addSuppressed(cancelFailure);
             }
         }
 
@@ -234,14 +215,16 @@ public final class ExecutionCoordinator {
         }
     }
 
-    /**
-     * Result of task coordination, including local sink commit observations.
-     */
+    /** Result of task coordination and local sink commit observations. */
     public static final class ExecutionOutcome {
+
         private final Throwable failure;
         private final CommitSummary commitSummary;
 
-        private ExecutionOutcome(Throwable failure, CommitSummary commitSummary) {
+        private ExecutionOutcome(
+                Throwable failure,
+                CommitSummary commitSummary) {
+
             this.failure = failure;
             this.commitSummary = commitSummary;
         }
