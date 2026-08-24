@@ -1,10 +1,8 @@
 package com.link.up.server.http.servlet;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.link.up.api.job.JobSpec;
 import com.link.up.server.dto.JobSubmitRequest;
 import com.link.up.server.http.FluxServlet;
-import com.link.up.server.http.JsonSupport;
 import com.link.up.server.service.JobRestService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -13,17 +11,13 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 
-/**
- * /api/v1/jobs 集合资源。
- */
+/** Handles the /api/v1/jobs collection resource. */
 public final class JobsServlet
         extends FluxServlet {
 
     private static final Logger LOG =
-            LogManager.getLogger(
-                    JobsServlet.class);
+            LogManager.getLogger(JobsServlet.class);
 
     private final JobRestService service;
     private final int maxRequestBytes;
@@ -36,6 +30,7 @@ public final class JobsServlet
         this.maxRequestBytes = maxRequestBytes;
     }
 
+    @Override
     protected void doPost(
             HttpServletRequest request,
             HttpServletResponse response)
@@ -48,46 +43,30 @@ public final class JobsServlet
                         request,
                         maxRequestBytes);
 
-        Object result;
+        Object result =
+                isJsonContentType(request)
+                        ? submitJson(
+                                request,
+                                body)
+                        : submitLegacy(
+                                request,
+                                body);
 
-        if (isJson(request)) {
-            try {
-                JobSubmitRequest submitRequest =
-                        JsonSupport.mapper()
-                                .readValue(
-                                        body,
-                                        JobSubmitRequest.class);
-
-                logSubmissionSummary(
-                        request,
-                        submitRequest,
-                        body);
-
-                result = service.submit(submitRequest);
-            } catch (JsonProcessingException exception) {
-                throw new IllegalArgumentException(
-                        "Invalid JSON submit request");
-            }
-        } else {
-            LOG.info(
-                    "Received legacy job submission, contentType={}, bodyBytes={}",
-                    safeLogValue(
-                            request.getContentType()),
-                    utf8Length(body));
-
-            result = service.submitLegacyResponse(body);
-        }
-
-        write(response, 202, result);
+        write(
+                response,
+                202,
+                result);
     }
 
+    @Override
     protected void doGet(
             HttpServletRequest request,
             HttpServletResponse response)
             throws IOException {
 
         String externalExecutionId =
-                request.getParameter("externalExecutionId");
+                request.getParameter(
+                        "externalExecutionId");
 
         if (externalExecutionId != null
                 && !externalExecutionId.trim().isEmpty()) {
@@ -100,8 +79,16 @@ public final class JobsServlet
             return;
         }
 
-        int page = intParameter(request, "page", 1);
-        int pageSize = intParameter(request, "pageSize", 20);
+        int page =
+                intParameter(
+                        request,
+                        "page",
+                        1);
+        int pageSize =
+                intParameter(
+                        request,
+                        "pageSize",
+                        20);
 
         write(
                 response,
@@ -110,6 +97,35 @@ public final class JobsServlet
                         request.getParameter("status"),
                         page,
                         pageSize));
+    }
+
+    private Object submitJson(
+            HttpServletRequest request,
+            String body) {
+
+        JobSubmitRequest submitRequest =
+                JobSubmitRequestDecoder.decode(
+                        body,
+                        "Invalid JSON submit request");
+
+        logSubmissionSummary(
+                request,
+                submitRequest,
+                body);
+
+        return service.submit(submitRequest);
+    }
+
+    private Object submitLegacy(
+            HttpServletRequest request,
+            String body) {
+
+        LOG.info(
+                "Received legacy job submission, contentType={}, bodyBytes={}",
+                safeLogValue(request.getContentType()),
+                utf8Length(body));
+
+        return service.submitLegacyResponse(body);
     }
 
     private void logSubmissionSummary(
@@ -123,9 +139,10 @@ public final class JobsServlet
                         : submitRequest.getJobSpec();
 
         LOG.info(
-                "Received job submission, contentType={}, bodyBytes={}, externalExecutionId={}, definitionVersion={}, jobName={}, sourceConnector={}, sinkConnector={}",
-                safeLogValue(
-                        request.getContentType()),
+                "Received job submission, contentType={}, bodyBytes={}, "
+                        + "externalExecutionId={}, definitionVersion={}, "
+                        + "jobName={}, sourceConnector={}, sinkConnector={}",
+                safeLogValue(request.getContentType()),
                 utf8Length(body),
                 safeLogValue(
                         submitRequest == null
@@ -152,7 +169,6 @@ public final class JobsServlet
 
     private String connectorId(
             JobSpec.Connector connector) {
-
         return connector == null
                 ? null
                 : connector.getConnectorId();
@@ -174,23 +190,5 @@ public final class JobsServlet
                 : value.getBytes(
                         StandardCharsets.UTF_8)
                         .length;
-    }
-
-    private boolean isJson(HttpServletRequest request) {
-        String contentType = request.getContentType();
-
-        if (contentType == null) {
-            return false;
-        }
-
-        int separator = contentType.indexOf(';');
-        String mediaType =
-                separator >= 0
-                        ? contentType.substring(0, separator)
-                        : contentType;
-
-        return "application/json".equals(
-                mediaType.trim()
-                        .toLowerCase(Locale.ROOT));
     }
 }
