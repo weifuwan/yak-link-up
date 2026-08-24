@@ -1,5 +1,6 @@
 package com.link.up.framework.planner;
 
+import com.link.up.framework.source.SourceCoordinator;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
@@ -60,5 +61,26 @@ public class PlannerBoundaryTest {
                         Modifier.isFinal(field.getModifiers()));
             }
         }
+    }
+
+    @Test
+    public void jobPlannerMustDelegateSourceDiscoveryToSourceCoordinator() {
+        boolean foundSourceCoordinator = false;
+
+        for (Field field : JobPlanner.class.getDeclaredFields()) {
+            if (SourceCoordinator.class.isAssignableFrom(field.getType())) {
+                foundSourceCoordinator = true;
+            }
+
+            String typeName = field.getGenericType().getTypeName();
+            assertFalse(
+                    "JobPlanner must not own SourceSplitEnumerator directly",
+                    typeName.contains(
+                            "com.link.up.api.source.SourceSplitEnumerator"));
+        }
+
+        assertTrue(
+                "JobPlanner must delegate split discovery to SourceCoordinator",
+                foundSourceCoordinator);
     }
 }

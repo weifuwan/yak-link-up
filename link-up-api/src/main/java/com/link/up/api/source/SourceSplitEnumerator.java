@@ -3,18 +3,23 @@ package com.link.up.api.source;
 import java.util.List;
 
 /**
- * 离线 Source 分片生成器。
+ * Discovers bounded splits for one Source planning attempt.
+ *
+ * <p>An enumerator is created by {@link Source#createEnumerator} and may own
+ * temporary split-planning resources. The framework closes it after
+ * enumeration, including when enumeration fails. It must not own SourceReader
+ * instances or task-runtime state.</p>
  */
 public interface SourceSplitEnumerator<SplitT extends SourceSplit>
         extends AutoCloseable {
 
     /**
-     * 生成当前 Source 的全部数据分片。
+     * Returns all splits represented by this bounded Source.
      */
     List<SplitT> enumerateSplits() throws Exception;
 
     @Override
     default void close() throws Exception {
-        // 默认没有需要关闭的资源。
+        // Default enumerators have no resources to release.
     }
 }

@@ -3,14 +3,18 @@ package com.link.up.api.source;
 import java.io.Serializable;
 
 /**
- * Source 分片生成上下文。
+ * Framework-provided context for one Source split-enumeration attempt.
+ *
+ * <p>The context is intentionally connector-neutral and may grow with stable
+ * planning inputs over time. Connector implementations should not depend on
+ * framework runtime classes.</p>
  */
 public final class SourceEnumeratorContext implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     /**
-     * 当前 Source 配置的并行度。
+     * Configured Source reader parallelism for this job.
      */
     private final int parallelism;
 

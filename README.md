@@ -24,14 +24,23 @@ The rules are intentionally strict:
 - connector modules depend on `link-up-api`, not on framework internals.
 - `link-up-launcher` and `link-up-server` are composition roots that assemble the framework with concrete connectors.
 
-The runtime architecture is Flink-inspired at the role level (`Source`, `SourceReader`, `SourceSplit`, planner, task runtime),
-without copying Flink's distributed complexity. The model lifecycle is explicit:
+The runtime architecture is Flink-inspired at the role level without copying Flink's distributed complexity. The model
+lifecycle is explicit:
 
 ```text
 JobSpec -> JobDefinition -> PreparedJob -> JobGraph -> ExecutionGraph -> JobResult
 ```
 
-Runtime responsibilities are also separated by role:
+Bounded Source split discovery has its own role chain:
+
+```text
+JobPlanner
+  -> SourceCoordinator
+     -> Source#createEnumerator(...)
+        -> SourceSplitEnumerator
+```
+
+Runtime responsibilities are separated independently:
 
 ```text
 JobExecution
@@ -43,12 +52,16 @@ JobExecution
                  -> TaskExecutor
 ```
 
-`JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `JobCoordinator` owns the
-job lifecycle and result aggregation, while scheduler/executor roles own pipeline concurrency and execution separately.
+`JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `SourceCoordinator` owns the
+framework side of Enumerator lifecycle/validation, while `JobPlanner` only builds topology from validated splits.
+`JobCoordinator` owns the job lifecycle and result aggregation, while scheduler/executor roles own pipeline concurrency
+and execution separately.
+
 See [architecture](docs/architecture.md),
 [ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md),
 [ADR-0002](docs/adr/0002-jobgraph-executiongraph.md),
-[ADR-0003](docs/adr/0003-runtime-role-separation.md), and the
+[ADR-0003](docs/adr/0003-runtime-role-separation.md),
+[ADR-0004](docs/adr/0004-source-enumerator-coordination.md), and the
 [connector development guide](docs/connector-development.md).
 
 ## Quick start

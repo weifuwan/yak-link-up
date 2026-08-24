@@ -2,7 +2,7 @@
 
 This document is the architecture baseline for Link-Up. It describes the boundaries that new code must follow and the
 vocabulary used in reviews. The runtime design is inspired by Apache Flink's separation of connector contracts,
-planning, and runtime roles, but Link-Up remains a small local batch synchronization engine.
+planning, coordination, scheduling, and execution roles, but Link-Up remains a small local batch synchronization engine.
 
 ## Goals
 
@@ -11,10 +11,11 @@ The architecture is evolving incrementally instead of through a full rewrite:
 - one canonical implementation for each framework role;
 - explicit module and package dependency direction;
 - separate protocol, definition, physical-plan, runtime-state, and read-model lifecycles;
-- predictable naming for factories, planners, coordinators, schedulers, executors, readers, writers, and repositories;
+- predictable naming for factories, planners, coordinators, schedulers, executors, enumerators, readers, writers, and repositories;
 - a repeatable connector package template;
 - no mutable runtime ownership inside planner models;
-- no single runtime class owning lifecycle, scheduling, and execution at the same time.
+- no single runtime class owning lifecycle, scheduling, and execution at the same time;
+- one canonical Source split-discovery path based on `SourceSplitEnumerator`.
 
 Link-Up does not attempt to reproduce Flink's distributed scheduler, RPC stack, checkpoint subsystem, resource manager,
 or compatibility surface.
@@ -40,8 +41,9 @@ Forbidden dependencies: `link-up-framework`, `link-up-server`, `link-up-launcher
 
 ### `link-up-framework`
 
-Owns local engine internals: connector discovery/preparation, job compilation, physical planning, channels, routing,
-execution state, runtime coordination/scheduling, task execution, metrics, and connector classloader isolation.
+Owns local engine internals: connector discovery/preparation, Source coordination, job compilation, physical planning,
+channels, routing, execution state, runtime coordination/scheduling, task execution, metrics, and connector classloader
+isolation.
 
 It may depend on `link-up-api`. It must not import concrete connector implementations.
 
@@ -76,6 +78,10 @@ JobDefinition                validated internal definition
 PreparedJob                  resolved connector/schema resources
     |
     | JobPlanner
+    |    |
+    |    +--> SourceCoordinator
+    |             |
+    |             +--> SourceSplitEnumerator
     v
 JobGraph                     immutable physical graph
     |
@@ -103,14 +109,108 @@ JobSnapshot                  server-side read model
 
 The core distinctions are:
 
+- `SourceCoordinator` answers **how bounded Source splits are discovered and validated**;
+- `JobPlanner` answers **how validated work becomes an immutable physical topology**;
 - `JobGraph` answers **what should be executed**;
 - `ExecutionGraph` answers **what is happening in this run**;
 - `JobCoordinator` answers **how the run transitions and finishes**;
 - `PipelineScheduler` answers **when pipeline units are allowed to run**;
 - `PipelineExecutor` answers **how one selected pipeline is executed**.
 
-See [ADR-0002](adr/0002-jobgraph-executiongraph.md) and
-[ADR-0003](adr/0003-runtime-role-separation.md) for the decisions and consequences.
+See [ADR-0002](adr/0002-jobgraph-executiongraph.md),
+[ADR-0003](adr/0003-runtime-role-separation.md), and
+[ADR-0004](adr/0004-source-enumerator-coordination.md) for the decisions and consequences.
+
+## Source coordination
+
+Phase 4 makes `SourceSplitEnumerator` the canonical bounded split-discovery contract.
+
+```text
+PreparedSource
+    |
+    v
+SourceCoordinator
+    |
+    +--> SourceEnumeratorContext(sourceParallelism)
+    |
+    +--> connector ClassLoaderScope
+    |
+    v
+Source#createEnumerator(...)
+    |
+    v
+SourceSplitEnumerator
+    |
+    v
+enumerateSplits()
+    |
+    v
+validated immutable split list
+    |
+    v
+JobPlanner
+```
+
+### `Source`
+
+`Source` remains an immutable connector-level object. It creates per-planning Enumerators and per-task Readers; it must
+not itself become a scheduler or hold task-runtime ownership.
+
+New connectors should implement:
+
+```text
+Source#createEnumerator(preparedTables, SourceEnumeratorContext)
+Source#createReader(preparedTables, batchSize)
+```
+
+The legacy `Source#createSplits(...)` overloads are deprecated compatibility hooks. The default
+`Source#createEnumerator(...)` adapts existing connectors by invoking those legacy methods, so migration can happen one
+connector at a time. New connectors should not build new behavior around the legacy hooks.
+
+### Preparation validation
+
+`ConnectorPreparer` remains responsible for connector configuration and connector-specific source-parallelism validation.
+This is intentionally earlier than split enumeration so unsupported Source modes fail before Sink preparation can perform
+metadata/DDL side effects.
+
+### `SourceCoordinator`
+
+`framework.source.SourceCoordinator` starts from an already validated `PreparedSource` and owns the framework side of
+split discovery:
+
+- `SourceEnumeratorContext` construction;
+- connector thread-context classloader scope during Enumerator lifecycle;
+- Enumerator creation and close on success/failure;
+- validation and immutable copying of Enumerator output.
+
+An empty split list is valid and represents empty bounded input. Non-empty results must have non-null splits, non-blank
+`splitId`/`dataSetId`, and unique `splitId` values within each data set.
+
+`SourceCoordinator` does **not**:
+
+- repeat connector configuration/parallelism validation;
+- group splits into pipelines;
+- assign splits to SourceTasks;
+- create `LocalSplitQueue`;
+- create SourceReaders;
+- schedule execution.
+
+### Connector migration
+
+JDBC is the first native Enumerator implementation in the canonical path:
+
+```text
+JdbcSource#createEnumerator
+    |
+    v
+JdbcSourceSplitGenerator         resolve JDBC metadata/statistics
+    |
+    v
+JdbcSourceSplitEnumerator       calculate bounded JDBC splits
+```
+
+Its legacy `createSplits(...)` methods delegate through the Enumerator path. Existing connectors such as HTTP can remain
+on legacy `createSplits(...)` temporarily because the API default Enumerator adapts them.
 
 ## Physical planning
 
@@ -133,6 +233,17 @@ A `PipelineGraph` is the physical execution boundary for one logical data set. I
 The graph records the selected policy but does not instantiate a mutable split queue. The original source enumeration
 order is stored independently from round-robin task assignments so dynamic execution does not accidentally reorder
 split acquisition.
+
+### `JobPlanner`
+
+`JobPlanner` consumes validated splits from `SourceCoordinator`. It owns:
+
+- grouping by `dataSetId`;
+- source/sink task parallelism;
+- static round-robin split assignment;
+- `PipelineGraph` / `JobGraph` construction.
+
+`JobPlanner` must not call `Source#createSplits(...)` or own `SourceSplitEnumerator` lifecycle directly.
 
 ### `SourceTaskPlan` / `SinkTaskPlan`
 
@@ -258,6 +369,12 @@ Prepared connector objects live here because they are framework-owned resolved r
 
 This package may create/resolve connector instances. It must not schedule or execute tasks.
 
+### `framework.source`
+
+Owns framework-side Source split coordination. It may create and close `SourceSplitEnumerator` instances and validate
+enumerated split output. It must not repeat connector preparation validation, build task topology, create readers, or own
+execution scheduling/runtime queues.
+
 ### `framework.job`
 
 Normalized job definition, execution configuration, statuses, and result value objects. `JobSpecCompiler` translates the
@@ -267,11 +384,13 @@ This package must not create threads, open connector resources, or perform task 
 
 ### `framework.planner`
 
-Transforms prepared input into immutable `JobGraph` / `PipelineGraph` physical models. Planner code may calculate split
-assignment, parallelism, pipeline topology, and task plans.
+Transforms prepared input and validated Source splits into immutable `JobGraph` / `PipelineGraph` physical models.
+Planner code may calculate split assignment, parallelism, pipeline topology, and task plans.
 
 Planner code must not:
 
+- call legacy Source split-discovery methods directly;
+- own `SourceSplitEnumerator` lifecycle;
 - create threads or executor services;
 - create channels;
 - create `SplitProvider` / `LocalSplitQueue`;
@@ -308,7 +427,8 @@ Own runtime measurements only. Metrics observe execution; they must not become a
 
 ### `framework.classloading`
 
-Own connector classloader isolation and classloader scope management.
+Own connector classloader isolation and classloader scope management. Connector lifecycle callbacks that may load
+connector-specific classes must run inside the connector's classloader scope.
 
 ## Role vocabulary
 
@@ -324,31 +444,14 @@ Use role names consistently. A suffix is a contract, not decoration.
 | `Coordinator` | Coordinate lifecycle and outcomes across multiple actors at one hierarchy level. |
 | `Scheduler` | Decide when executable work is allowed to run and enforce concurrency policy. |
 | `Executor` | Execute already-selected/planned work without choosing scheduling policy. |
+| `Enumerator` | Discover bounded Source splits for one planning attempt. |
 | `Reader` | Read records from an external source. |
 | `Writer` | Write records to an external sink. |
-| `Enumerator` | Discover or enumerate source splits. |
 | `Repository` | Persist or retrieve state; no scheduling side effects. |
 | `Gateway` | Cross a process/system boundary behind a narrow interface. |
 | `Manager` | Reserved for a true top-level lifecycle owner; prefer a more precise role when possible. |
 
 Avoid catch-all names such as `Common`, `Helper`, `Misc`, and generic `Utils` when a domain role can be named.
-
-## Source roles
-
-The API exposes the core Flink-inspired concepts:
-
-```text
-Source
-  -> SourceSplit
-  -> SourceReader
-  -> SourceSplitEnumerator
-```
-
-The physical/runtime split is explicit, but split discovery is still transitional: `JobPlanner` invokes
-`Source#createSplits(...)` during preparation/planning for compatibility. A later phase should make
-`SourceSplitEnumerator` / source coordination the standard split-discovery role.
-
-Do not add another split abstraction to work around this transition.
 
 ## Server boundary
 
@@ -375,14 +478,16 @@ Reject a change when it introduces any of the following without an explicit arch
 1. a connector importing `com.link.up.framework.*`;
 2. framework code importing a concrete connector package;
 3. transport DTOs being used as mutable runtime state;
-4. planner code creating threads, channels, split queues, cancellation tokens, or runtime metrics;
-5. `SourceTaskPlan`, `PipelineGraph`, or `JobGraph` holding `SplitProvider` or other mutable execution ownership;
-6. `JobExecution` or `JobCoordinator` directly owning an `ExecutorService`;
-7. `PipelineScheduler` performing connector I/O or owning `ExecutionGraph` state;
-8. `PipelineExecutor` deciding job-level concurrency/failure policy;
-9. a second `FactoryRegistry`, task hierarchy, or source execution path;
-10. a generic `common`, `core`, `helper`, or `utils` package used as a dumping ground;
-11. server HTTP code manipulating task/channel internals directly.
+4. `JobPlanner` invoking `Source#createSplits(...)` or creating/closing a `SourceSplitEnumerator` directly;
+5. `SourceCoordinator` assigning tasks, creating Readers, or creating runtime split queues;
+6. planner code creating threads, channels, split queues, cancellation tokens, or runtime metrics;
+7. `SourceTaskPlan`, `PipelineGraph`, or `JobGraph` holding `SplitProvider` or other mutable execution ownership;
+8. `JobExecution` or `JobCoordinator` directly owning an `ExecutorService`;
+9. `PipelineScheduler` performing connector I/O or owning `ExecutionGraph` state;
+10. `PipelineExecutor` deciding job-level concurrency/failure policy;
+11. a second `FactoryRegistry`, task hierarchy, Source coordinator, or source execution path;
+12. a generic `common`, `core`, `helper`, or `utils` package used as a dumping ground;
+13. server HTTP code manipulating task/channel internals directly.
 
 ## Completed architecture phases
 
@@ -412,12 +517,22 @@ Reject a change when it introduces any of the following without an explicit arch
 - preserved worker-thread log context at the executor boundary;
 - added focused scheduling and architecture-boundary tests.
 
+### Phase 4: Source Enumerator coordination
+
+- made `Source#createEnumerator(...)` the canonical split-discovery extension point;
+- introduced `framework.source.SourceCoordinator` for Enumerator lifecycle, connector classloader scope, and split-output validation;
+- kept connector-specific validation in `ConnectorPreparer` so it remains fail-fast;
+- removed direct split discovery from `JobPlanner`;
+- retained deprecated `createSplits(...)` hooks through a compatibility adapter;
+- migrated JDBC to native `JdbcSourceSplitEnumerator` creation;
+- standardized split identity validation for static and dynamic execution paths.
+
 ## Next architecture steps
 
 The next phases should remain incremental:
 
-1. integrate `SourceSplitEnumerator` as the standard split-discovery/coordinator role;
-2. migrate connector package layouts toward the connector development template as connectors are touched;
+1. migrate remaining connectors to native `SourceSplitEnumerator` implementations as they are touched;
+2. migrate connector package layouts toward the connector development template;
 3. improve server application/domain/adapter boundaries without coupling them to execution internals;
 4. evaluate retry/recovery semantics only after execution-state ownership is stable;
 5. split Maven modules only if package boundaries prove insufficient.

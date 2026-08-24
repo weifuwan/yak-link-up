@@ -9,6 +9,7 @@ import com.link.up.framework.connector.PreparedSource;
 import com.link.up.framework.execution.TaskId;
 import com.link.up.framework.execution.TaskType;
 import com.link.up.framework.job.ExecutionConfig;
+import com.link.up.framework.source.SourceCoordinator;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -19,19 +20,34 @@ import java.util.Objects;
 /**
  * Builds an immutable {@link JobGraph} grouped by SourceSplit.dataSetId.
  *
- * <p>The planner calculates topology and split assignment only. Runtime
- * ownership objects such as split queues are created later by the execution
- * layer.
+ * <p>The planner calculates topology and split assignment only. Source split
+ * discovery is delegated to {@link SourceCoordinator}; runtime ownership
+ * objects such as split queues are created later by the execution layer.</p>
  */
 public final class JobPlanner {
 
+    private final SourceCoordinator sourceCoordinator;
     private final SplitAssigner splitAssigner;
 
     public JobPlanner() {
-        this(new SplitAssigner());
+        this(
+                new SourceCoordinator(),
+                new SplitAssigner());
     }
 
     public JobPlanner(SplitAssigner splitAssigner) {
+        this(
+                new SourceCoordinator(),
+                splitAssigner);
+    }
+
+    public JobPlanner(
+            SourceCoordinator sourceCoordinator,
+            SplitAssigner splitAssigner) {
+
+        this.sourceCoordinator = Objects.requireNonNull(
+                sourceCoordinator,
+                "sourceCoordinator must not be null");
         this.splitAssigner = Objects.requireNonNull(
                 splitAssigner,
                 "splitAssigner must not be null");
@@ -50,36 +66,21 @@ public final class JobPlanner {
             throws Exception {
 
         ExecutionConfig config = job.getExecutionConfig();
-        List<SplitT> splits = preparedSource
-                .getSource()
-                .createSplits(
-                        preparedSource.getTables(),
+        List<SplitT> splits =
+                sourceCoordinator.enumerateSplits(
+                        preparedSource,
                         config.getSourceParallelism());
-
-        if (splits == null) {
-            throw new IllegalStateException(
-                    "Source returned null splits");
-        }
 
         Map<String, List<SplitT>> byDataSet =
                 new LinkedHashMap<String, List<SplitT>>();
 
         for (SplitT split : splits) {
-            if (split == null) {
-                throw new IllegalStateException(
-                        "Source returned a null split");
-            }
+            String dataSetId = split.dataSetId().trim();
 
-            String id = split.dataSetId();
-            if (id == null || id.trim().isEmpty()) {
-                throw new IllegalStateException(
-                        "SourceSplit dataSetId must not be blank");
-            }
-
-            List<SplitT> group = byDataSet.get(id);
+            List<SplitT> group = byDataSet.get(dataSetId);
             if (group == null) {
                 group = new ArrayList<SplitT>();
-                byDataSet.put(id, group);
+                byDataSet.put(dataSetId, group);
             }
             group.add(split);
         }

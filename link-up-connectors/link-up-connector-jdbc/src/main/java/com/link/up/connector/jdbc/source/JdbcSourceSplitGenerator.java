@@ -1,5 +1,6 @@
 package com.link.up.connector.jdbc.source;
 
+import com.link.up.api.source.SourceSplitEnumerator;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.connector.jdbc.config.JdbcSourceConfig;
@@ -19,7 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Creates the bounded JDBC splits for a prepared source.
+ * Prepares bounded JDBC split enumeration from a prepared source schema.
  */
 final class JdbcSourceSplitGenerator {
     private static final Logger LOG = LoggerFactory.getLogger(JdbcSourceSplitGenerator.class);
@@ -27,7 +28,30 @@ final class JdbcSourceSplitGenerator {
     private JdbcSourceSplitGenerator() {
     }
 
+    /**
+     * Compatibility helper for legacy callers that still request the split
+     * list directly.
+     */
     static List<JdbcSourceSplit> generate(
+            JdbcSourceConfig config,
+            Map<TablePath, CatalogTable> tables,
+            int parallelism)
+            throws Exception {
+
+        try (SourceSplitEnumerator<JdbcSourceSplit> enumerator =
+                     createEnumerator(
+                             config,
+                             tables,
+                             parallelism)) {
+            return enumerator.enumerateSplits();
+        }
+    }
+
+    /**
+     * Resolves the connector-specific table metadata/statistics needed by the
+     * JDBC enumerator, then returns the canonical bounded split enumerator.
+     */
+    static SourceSplitEnumerator<JdbcSourceSplit> createEnumerator(
             JdbcSourceConfig config,
             Map<TablePath, CatalogTable> tables,
             int parallelism)
@@ -45,35 +69,86 @@ final class JdbcSourceSplitGenerator {
                         JdbcCatalogUtils.getTables(config, dialect),
                         tables);
 
-        Map<TablePath, JdbcSourceTable> plannedTables = new LinkedHashMap<TablePath, JdbcSourceTable>();
-        JdbcSplitStatisticsProvider statisticsProvider = new JdbcSplitStatisticsProvider(config.getConnectionConfig(), dialect);
+        Map<TablePath, JdbcSourceTable> plannedTables =
+                new LinkedHashMap<TablePath, JdbcSourceTable>();
+        JdbcSplitStatisticsProvider statisticsProvider =
+                new JdbcSplitStatisticsProvider(
+                        config.getConnectionConfig(),
+                        dialect);
+
         for (JdbcSourceTable table : sourceTables.values()) {
             JdbcSourceTable planned = table;
-            if (table.getPartitionColumn() != null && config.getSplitPlanningMode() != SplitPlanningMode.MANUAL) {
+            if (table.getPartitionColumn() != null
+                    && config.getSplitPlanningMode() != SplitPlanningMode.MANUAL) {
                 SplitPlanningMode mode = config.getSplitPlanningMode();
                 try {
-                    JdbcSplitStatistics statistics = statisticsProvider.collect(new JdbcSplitStatisticsRequest(table, mode, config.getStatisticsQueryTimeout(), config.getSampleSize()));
+                    JdbcSplitStatistics statistics =
+                            statisticsProvider.collect(
+                                    new JdbcSplitStatisticsRequest(
+                                            table,
+                                            mode,
+                                            config.getStatisticsQueryTimeout(),
+                                            config.getSampleSize()));
                     if (statistics.isEmpty()) {
                         plannedTables.put(table.getTablePath(), null);
                         continue;
                     }
                     if (statistics.isAllNull()) {
-                        if (!config.isNullPartitionSingleSplit())
-                            throw new IllegalArgumentException("Partition column is entirely NULL: " + table.getTablePath());
-                    } else
-                        planned = JdbcSourceTable.builder().tablePath(table.getTablePath()).query(table.getQuery()).partitionColumn(table.getPartitionColumn()).partitionNumber(table.getPartitionNumber()).partitionStart(statistics.getLowerBound().orElse(null)).partitionEnd(statistics.getUpperBound().orElse(null)).catalogTable(table.getCatalogTable()).build();
+                        if (!config.isNullPartitionSingleSplit()) {
+                            throw new IllegalArgumentException(
+                                    "Partition column is entirely NULL: "
+                                            + table.getTablePath());
+                        }
+                    } else {
+                        planned = JdbcSourceTable.builder()
+                                .tablePath(table.getTablePath())
+                                .query(table.getQuery())
+                                .partitionColumn(table.getPartitionColumn())
+                                .partitionNumber(table.getPartitionNumber())
+                                .partitionStart(
+                                        statistics.getLowerBound().orElse(null))
+                                .partitionEnd(
+                                        statistics.getUpperBound().orElse(null))
+                                .catalogTable(table.getCatalogTable())
+                                .build();
+                    }
                 } catch (UnsupportedOperationException e) {
-                    if (mode != SplitPlanningMode.AUTO_SAMPLE || !config.isAllowStatisticsFallback()) throw e;
-                    LOG.warn("AUTO_SAMPLE statistics unsupported for table {}; falling back to AUTO_MIN_MAX", table.getTablePath());
-                    JdbcSplitStatistics statistics = statisticsProvider.collect(new JdbcSplitStatisticsRequest(table, SplitPlanningMode.AUTO_MIN_MAX, config.getStatisticsQueryTimeout(), config.getSampleSize()));
+                    if (mode != SplitPlanningMode.AUTO_SAMPLE
+                            || !config.isAllowStatisticsFallback()) {
+                        throw e;
+                    }
+                    LOG.warn(
+                            "AUTO_SAMPLE statistics unsupported for table {}; falling back to AUTO_MIN_MAX",
+                            table.getTablePath());
+                    JdbcSplitStatistics statistics =
+                            statisticsProvider.collect(
+                                    new JdbcSplitStatisticsRequest(
+                                            table,
+                                            SplitPlanningMode.AUTO_MIN_MAX,
+                                            config.getStatisticsQueryTimeout(),
+                                            config.getSampleSize()));
                     if (statistics.isEmpty()) {
                         plannedTables.put(table.getTablePath(), null);
                         continue;
                     }
-                    planned = JdbcSourceTable.builder().tablePath(table.getTablePath()).query(table.getQuery()).partitionColumn(table.getPartitionColumn()).partitionNumber(table.getPartitionNumber()).partitionStart(statistics.getLowerBound().orElse(null)).partitionEnd(statistics.getUpperBound().orElse(null)).catalogTable(table.getCatalogTable()).build();
+                    planned = JdbcSourceTable.builder()
+                            .tablePath(table.getTablePath())
+                            .query(table.getQuery())
+                            .partitionColumn(table.getPartitionColumn())
+                            .partitionNumber(table.getPartitionNumber())
+                            .partitionStart(
+                                    statistics.getLowerBound().orElse(null))
+                            .partitionEnd(
+                                    statistics.getUpperBound().orElse(null))
+                            .catalogTable(table.getCatalogTable())
+                            .build();
                 } catch (Exception e) {
-                    if (config.isMultiTable() && config.getMultiTableFailurePolicy().continueOtherTables()) {
-                        LOG.warn("Split statistics failed for table {}; continuing according to multi-table policy", table.getTablePath());
+                    if (config.isMultiTable()
+                            && config.getMultiTableFailurePolicy()
+                            .continueOtherTables()) {
+                        LOG.warn(
+                                "Split statistics failed for table {}; continuing according to multi-table policy",
+                                table.getTablePath());
                         continue;
                     }
                     throw e;
@@ -81,8 +156,12 @@ final class JdbcSourceSplitGenerator {
             }
             plannedTables.put(planned.getTablePath(), planned);
         }
+
         plannedTables.values().removeIf(java.util.Objects::isNull);
-        return new JdbcSourceSplitEnumerator(config, plannedTables, parallelism).enumerateSplits();
+        return new JdbcSourceSplitEnumerator(
+                config,
+                plannedTables,
+                parallelism);
     }
 
     /**
@@ -101,15 +180,20 @@ final class JdbcSourceSplitGenerator {
             Map<TablePath, JdbcSourceTable> discoveredTables,
             Map<TablePath, CatalogTable> preparedTables) {
 
-        Objects.requireNonNull(discoveredTables, "discoveredTables must not be null");
-        Objects.requireNonNull(preparedTables, "preparedTables must not be null");
+        Objects.requireNonNull(
+                discoveredTables,
+                "discoveredTables must not be null");
+        Objects.requireNonNull(
+                preparedTables,
+                "preparedTables must not be null");
 
         Map<TablePath, JdbcSourceTable> result =
                 new LinkedHashMap<TablePath, JdbcSourceTable>();
 
         for (JdbcSourceTable discoveredTable : discoveredTables.values()) {
             if (discoveredTable == null) {
-                throw new IllegalArgumentException("discoveredTables must not contain null values");
+                throw new IllegalArgumentException(
+                        "discoveredTables must not contain null values");
             }
 
             CatalogTable discoveredCatalogTable =
