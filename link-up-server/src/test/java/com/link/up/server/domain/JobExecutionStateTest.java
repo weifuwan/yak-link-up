@@ -18,7 +18,7 @@ import static org.junit.Assert.assertTrue;
 public class JobExecutionStateTest {
 
     @Test
-    public void shouldRecordLifecycleWithoutRuntimeOwnership() {
+    public void shouldRecordLifecycleAndAttemptWithoutRuntimeOwnership() {
         JobExecutionState state =
                 new JobExecutionState(
                         "job-1",
@@ -32,26 +32,28 @@ public class JobExecutionStateTest {
                 null,
                 null));
 
-        List<JobStateTransition> transitions =
-                state.getTransitions();
+        List<JobStateTransition> transitions = state.getTransitions();
         assertEquals(5, transitions.size());
-        assertEquals(ServerJobStatus.CREATED,
-                transitions.get(0).getToStatus());
-        assertEquals(ServerJobStatus.SUBMITTED,
-                transitions.get(1).getToStatus());
-        assertEquals(ServerJobStatus.QUEUED,
-                transitions.get(2).getToStatus());
-        assertEquals(ServerJobStatus.RUNNING,
-                transitions.get(3).getToStatus());
-        assertEquals(ServerJobStatus.LOST,
-                transitions.get(4).getToStatus());
+        assertEquals(ServerJobStatus.CREATED, transitions.get(0).getToStatus());
+        assertEquals(ServerJobStatus.SUBMITTED, transitions.get(1).getToStatus());
+        assertEquals(ServerJobStatus.QUEUED, transitions.get(2).getToStatus());
+        assertEquals(ServerJobStatus.RUNNING, transitions.get(3).getToStatus());
+        assertEquals(ServerJobStatus.LOST, transitions.get(4).getToStatus());
         assertEquals(4L, state.getStateVersion());
+
+        assertEquals(1, state.getAttempts().size());
+        JobExecutionAttempt attempt = state.getAttempts().get(0);
+        assertEquals(1, attempt.getAttemptNumber());
+        assertEquals("job-1-attempt-1", attempt.getAttemptId());
+        assertEquals(JobAttemptStatus.LOST, attempt.getStatus());
+        assertTrue(attempt.getQueuedTimeMillis() > 0L);
+        assertTrue(attempt.getStartTimeMillis() > 0L);
+        assertTrue(attempt.getEndTimeMillis() > 0L);
     }
 
     private static JobSubmission submission(String digest) {
-        ReadonlyConfig options =
-                ReadonlyConfig.fromMap(
-                        Collections.<String, Object>emptyMap());
+        ReadonlyConfig options = ReadonlyConfig.fromMap(
+                Collections.<String, Object>emptyMap());
         JobDefinition definition =
                 new JobDefinition(
                         "protocol-test",

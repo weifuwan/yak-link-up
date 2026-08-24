@@ -1,22 +1,17 @@
 package com.link.up.server.application;
 
 import com.link.up.server.domain.JobSubmission;
+import com.link.up.server.runtime.JobExecutionMetadata;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * In-process identity index for idempotent submission lookup.
- *
- * <p>The registry owns only index mechanics. Content equivalence is checked by
- * the application service against persisted execution metadata.</p>
- */
+/** In-process identity index for idempotent submission lookup. */
 final class JobSubmissionRegistry {
 
     private final ConcurrentMap<String, String>
             jobIdsByIdempotencyKey =
             new ConcurrentHashMap<String, String>();
-
     private final ConcurrentMap<String, String>
             jobIdsByExternalExecutionId =
             new ConcurrentHashMap<String, String>();
@@ -32,14 +27,12 @@ final class JobSubmissionRegistry {
         if (byIdempotency == null && byExternal == null) {
             return null;
         }
-
         if (byIdempotency != null
                 && byExternal != null
                 && !byIdempotency.equals(byExternal)) {
             throw new JobSubmissionConflictException(
                     "idempotencyKey and externalExecutionId reference different jobs");
         }
-
         return byIdempotency != null
                 ? byIdempotency
                 : byExternal;
@@ -48,13 +41,35 @@ final class JobSubmissionRegistry {
     void register(
             String jobId,
             JobSubmission submission) {
+        register(
+                jobId,
+                submission.getIdempotencyKey(),
+                submission.getExternalExecutionId());
+    }
+
+    void restore(
+            String jobId,
+            JobExecutionMetadata metadata) {
+        if (metadata == null) {
+            return;
+        }
+        register(
+                jobId,
+                metadata.getIdempotencyKey(),
+                metadata.getExternalExecutionId());
+    }
+
+    private void register(
+            String jobId,
+            String idempotencyKey,
+            String externalExecutionId) {
 
         String existingByIdempotency =
                 jobIdsByIdempotencyKey.putIfAbsent(
-                        submission.getIdempotencyKey(),
+                        idempotencyKey,
                         jobId);
-
-        if (existingByIdempotency != null) {
+        if (existingByIdempotency != null
+                && !existingByIdempotency.equals(jobId)) {
             throw new JobSubmissionConflictException(
                     "idempotencyKey already belongs to job "
                             + existingByIdempotency);
@@ -62,12 +77,12 @@ final class JobSubmissionRegistry {
 
         String existingByExternal =
                 jobIdsByExternalExecutionId.putIfAbsent(
-                        submission.getExternalExecutionId(),
+                        externalExecutionId,
                         jobId);
-
-        if (existingByExternal != null) {
+        if (existingByExternal != null
+                && !existingByExternal.equals(jobId)) {
             jobIdsByIdempotencyKey.remove(
-                    submission.getIdempotencyKey(),
+                    idempotencyKey,
                     jobId);
             throw new JobSubmissionConflictException(
                     "externalExecutionId already belongs to job "
@@ -78,7 +93,6 @@ final class JobSubmissionRegistry {
     void unregister(
             String jobId,
             JobSubmission submission) {
-
         jobIdsByIdempotencyKey.remove(
                 submission.getIdempotencyKey(),
                 jobId);

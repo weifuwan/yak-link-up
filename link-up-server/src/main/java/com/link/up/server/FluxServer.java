@@ -12,7 +12,7 @@ import com.link.up.server.config.FluxServerConfig;
 import com.link.up.server.http.JettyServer;
 import com.link.up.server.infrastructure.execution.LocalJobExecutor;
 import com.link.up.server.infrastructure.identity.LocalJobIdGenerator;
-import com.link.up.server.infrastructure.persistence.InMemoryJobRepository;
+import com.link.up.server.infrastructure.persistence.FileJobRepository;
 import com.link.up.server.infrastructure.runtime.LocalJobRuntimeScheduler;
 import com.link.up.server.registration.ControlPlaneRegistrationAgent;
 import com.link.up.server.registration.ControlPlaneRegistrationConfig;
@@ -27,20 +27,16 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Link-Up single-node offline Worker composition root.
- */
+/** Link-Up single-node offline Worker composition root. */
 public final class FluxServer {
 
-    private static final String LOG_FILE_PROPERTY =
-            "link.up.log.file";
+    private static final String LOG_FILE_PROPERTY = "link.up.log.file";
 
     static {
         configureDefaultLogFile();
     }
 
-    private static final Logger LOG =
-            LogManager.getLogger(FluxServer.class);
+    private static final Logger LOG = LogManager.getLogger(FluxServer.class);
 
     private FluxServer() {
     }
@@ -48,27 +44,20 @@ public final class FluxServer {
     public static void main(String[] args)
             throws Exception {
 
-        final FluxServerConfig config =
-                FluxServerConfig.fromArgs(args);
+        final FluxServerConfig config = FluxServerConfig.fromArgs(args);
 
-        List<Path> pluginDirectories =
-                config.getPluginDirectories();
-        ClassLoader classLoader =
-                Thread.currentThread()
-                        .getContextClassLoader();
-        Path[] pluginPaths =
-                pluginDirectories.toArray(
-                        new Path[pluginDirectories.size()]);
+        List<Path> pluginDirectories = config.getPluginDirectories();
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        Path[] pluginPaths = pluginDirectories.toArray(
+                new Path[pluginDirectories.size()]);
 
         JobExecutor jobExecutor =
-                new LocalJobExecutor(
-                        classLoader,
-                        pluginPaths);
+                new LocalJobExecutor(classLoader, pluginPaths);
         JobRepository repository =
-                new InMemoryJobRepository(
+                new FileJobRepository(
+                        config.getStateDirectory(),
                         config.getHistoryLimit());
-        JobIdGenerator jobIdGenerator =
-                new LocalJobIdGenerator();
+        JobIdGenerator jobIdGenerator = new LocalJobIdGenerator();
         JobRuntimeScheduler runtimeScheduler =
                 new LocalJobRuntimeScheduler(
                         config.getMaxQueuedJobs(),
@@ -95,22 +84,16 @@ public final class FluxServer {
                         config.getMaxQueuedJobs());
 
         final FactoryRegistry connectorRegistry =
-                FactoryRegistry.discover(
-                        classLoader,
-                        pluginPaths);
+                FactoryRegistry.discover(classLoader, pluginPaths);
         ConnectorSchemaCatalog connectorCatalog =
-                ConnectorSchemaCatalog.fromRegistry(
-                        connectorRegistry);
+                ConnectorSchemaCatalog.fromRegistry(connectorRegistry);
         ConnectorRestService connectorService =
                 new ConnectorRestService(
                         connectorCatalog,
                         connectorRegistry);
 
         final JettyServer server =
-                new JettyServer(
-                        config,
-                        jobService,
-                        connectorService);
+                new JettyServer(config, jobService, connectorService);
 
         final ControlPlaneRegistrationConfig registrationConfig =
                 ControlPlaneRegistrationConfig.load();
@@ -119,8 +102,7 @@ public final class FluxServer {
                         registrationConfig,
                         jobService,
                         connectorCatalog);
-        final AtomicBoolean shutdown =
-                new AtomicBoolean(false);
+        final AtomicBoolean shutdown = new AtomicBoolean(false);
 
         final Runnable shutdownAction =
                 new Runnable() {
@@ -129,7 +111,6 @@ public final class FluxServer {
                         if (!shutdown.compareAndSet(false, true)) {
                             return;
                         }
-
                         try {
                             registrationAgent.close();
                         } catch (RuntimeException exception) {
@@ -137,7 +118,6 @@ public final class FluxServer {
                                     "Failed to close control-plane registration agent",
                                     exception);
                         }
-
                         try {
                             server.stop();
                         } catch (Exception exception) {
@@ -145,9 +125,7 @@ public final class FluxServer {
                                     "Failed to stop HTTP server",
                                     exception);
                         }
-
                         jobApplication.close();
-
                         try {
                             connectorRegistry.close();
                         } catch (RuntimeException exception) {
@@ -159,9 +137,7 @@ public final class FluxServer {
                 };
 
         Thread shutdownHook =
-                new Thread(
-                        shutdownAction,
-                        "link-up-shutdown");
+                new Thread(shutdownAction, "link-up-shutdown");
         Runtime.getRuntime().addShutdownHook(shutdownHook);
 
         try {
@@ -169,24 +145,22 @@ public final class FluxServer {
             registrationAgent.start();
 
             LOG.info(
-                    "Link-Up Offline Worker started, nodeId={}, instanceId={}, host={}, port={}, jobThreads={}, connectorSchemas={}, pluginDirectories={}, dynamicRegistration={}",
+                    "Link-Up Offline Worker started, nodeId={}, instanceId={}, host={}, port={}, jobThreads={}, stateDirectory={}, connectorSchemas={}, pluginDirectories={}, dynamicRegistration={}",
                     workerIdentity.getNodeId(),
                     workerIdentity.getInstanceId(),
                     config.getHost(),
                     server.getLocalPort(),
                     config.getJobThreads(),
+                    config.getStateDirectory(),
                     connectorCatalog.list().size(),
                     config.getPluginDirectories(),
                     registrationConfig.isEnabled());
 
             server.join();
-
         } finally {
             shutdownAction.run();
-
             try {
-                Runtime.getRuntime()
-                        .removeShutdownHook(shutdownHook);
+                Runtime.getRuntime().removeShutdownHook(shutdownHook);
             } catch (IllegalStateException ignored) {
                 // JVM shutdown already started.
             }
@@ -198,26 +172,19 @@ public final class FluxServer {
                 || hasText(System.getenv("LOGFILE"))) {
             return;
         }
-
-        String logDirectory =
-                System.getProperty("link.up.log.dir");
+        String logDirectory = System.getProperty("link.up.log.dir");
         if (!hasText(logDirectory)) {
             logDirectory = System.getenv("LINK_UP_LOG_DIR");
         }
         if (!hasText(logDirectory)) {
             logDirectory = "logs";
         }
-
         System.setProperty(
                 LOG_FILE_PROPERTY,
-                Paths.get(
-                                logDirectory,
-                                "link-up-server.log")
-                        .toString());
+                Paths.get(logDirectory, "link-up-server.log").toString());
     }
 
     private static boolean hasText(String value) {
-        return value != null
-                && !value.trim().isEmpty();
+        return value != null && !value.trim().isEmpty();
     }
 }

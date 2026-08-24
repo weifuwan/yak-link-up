@@ -10,8 +10,10 @@ import com.link.up.framework.job.SourceDefinition;
 import com.link.up.framework.metrics.JobMetrics;
 import com.link.up.server.application.port.JobIdGenerator;
 import com.link.up.server.application.port.JobRuntimeScheduler;
+import com.link.up.server.domain.JobAttemptStatus;
 import com.link.up.server.domain.JobSubmission;
 import com.link.up.server.infrastructure.persistence.InMemoryJobRepository;
+import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobSnapshot;
 import org.junit.Test;
 
@@ -26,11 +28,10 @@ public class JobApplicationServiceProtocolTest {
     public void shouldReturnSameJobForSameIdempotentSubmission() {
         JobApplicationService application = application();
         try {
-            JobSubmission submission =
-                    submission(
-                            "external-100",
-                            "key-100",
-                            "digest-100");
+            JobSubmission submission = submission(
+                    "external-100",
+                    "key-100",
+                    "digest-100");
 
             JobSnapshot first = application.submit(submission);
             JobSnapshot second = application.submit(submission);
@@ -38,9 +39,15 @@ public class JobApplicationServiceProtocolTest {
             assertEquals(first.getJobId(), second.getJobId());
             assertEquals(
                     first.getJobId(),
-                    application.getJobByExternalExecutionId(
-                            "external-100")
+                    application.getJobByExternalExecutionId("external-100")
                             .getJobId());
+
+            JobExecutionMetadata metadata =
+                    application.getMetadata(first.getJobId());
+            assertEquals(1, metadata.getAttemptCount());
+            assertEquals(
+                    JobAttemptStatus.SUCCEEDED,
+                    metadata.getAttempts().get(0).getStatus());
         } finally {
             application.close();
         }
@@ -50,17 +57,14 @@ public class JobApplicationServiceProtocolTest {
     public void shouldRejectReusedIdempotencyKeyWithDifferentContent() {
         JobApplicationService application = application();
         try {
-            application.submit(
-                    submission(
-                            "external-200",
-                            "key-200",
-                            "digest-a"));
-
-            application.submit(
-                    submission(
-                            "external-200",
-                            "key-200",
-                            "digest-b"));
+            application.submit(submission(
+                    "external-200",
+                    "key-200",
+                    "digest-a"));
+            application.submit(submission(
+                    "external-200",
+                    "key-200",
+                    "digest-b"));
         } finally {
             application.close();
         }
@@ -82,14 +86,13 @@ public class JobApplicationServiceProtocolTest {
                 idGenerator);
     }
 
-    private static JobSubmission submission(
+    static JobSubmission submission(
             String externalExecutionId,
             String idempotencyKey,
             String digest) {
 
-        ReadonlyConfig options =
-                ReadonlyConfig.fromMap(
-                        Collections.<String, Object>emptyMap());
+        ReadonlyConfig options = ReadonlyConfig.fromMap(
+                Collections.<String, Object>emptyMap());
         JobDefinition definition =
                 new JobDefinition(
                         "protocol-test",
@@ -115,13 +118,11 @@ public class JobApplicationServiceProtocolTest {
                 String jobId,
                 JobDefinition definition,
                 Listener listener) {
-
             listener.onQueued();
             if (!listener.onStarting()) {
                 listener.onCompleted(null, null, true);
                 return;
             }
-
             long now = System.currentTimeMillis();
             listener.onCompleted(
                     new JobResult(
@@ -135,23 +136,9 @@ public class JobApplicationServiceProtocolTest {
                     false);
         }
 
-        @Override
-        public void cancel(String jobId) {
-        }
-
-        @Override
-        public JobMetrics getMetrics(String jobId) {
-            return null;
-        }
-
-        @Override
-        public boolean isClosed() {
-            return closed;
-        }
-
-        @Override
-        public void close() {
-            closed = true;
-        }
+        @Override public void cancel(String jobId) { }
+        @Override public JobMetrics getMetrics(String jobId) { return null; }
+        @Override public boolean isClosed() { return closed; }
+        @Override public void close() { closed = true; }
     }
 }
