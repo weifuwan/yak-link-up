@@ -1,9 +1,9 @@
 package com.link.up.server.http;
 
+import com.link.up.server.application.JobNotFoundException;
+import com.link.up.server.application.JobSubmissionConflictException;
 import com.link.up.server.dto.ErrorResponse;
-import com.link.up.server.runtime.JobNotFoundException;
 import com.link.up.server.runtime.JobStateConflictException;
-import com.link.up.server.runtime.JobSubmissionConflictException;
 
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
@@ -20,7 +20,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * REST 统一异常处理和请求 ID 生成。
+ * REST unified exception mapping and request ID generation.
  */
 public final class ExceptionHandlingFilter
         implements Filter {
@@ -103,9 +103,7 @@ public final class ExceptionHandlingFilter
 
     private static ErrorMapping map(Throwable failure) {
         if (failure instanceof RestException) {
-            RestException exception =
-                    (RestException) failure;
-
+            RestException exception = (RestException) failure;
             return new ErrorMapping(
                     exception.getHttpStatus(),
                     exception.getCode(),
@@ -162,32 +160,26 @@ public final class ExceptionHandlingFilter
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-
         while (current instanceof ServletException
                 && current.getCause() != null) {
             current = current.getCause();
         }
-
         return current;
     }
 
     private static String requestId(
             HttpServletRequest request) {
-
         String provided = request.getHeader("X-Request-Id");
-
         if (provided != null
                 && provided.length() <= 128
                 && provided.matches("[A-Za-z0-9._-]+")) {
             return provided;
         }
-
         return UUID.randomUUID().toString();
     }
 
     private static String safeMessage(Throwable failure) {
         String message = failure.getMessage();
-
         return message == null || message.trim().isEmpty()
                 ? failure.getClass().getSimpleName()
                 : message;
@@ -196,7 +188,6 @@ public final class ExceptionHandlingFilter
     private static String logMessage(
             HttpServletRequest request,
             String requestId) {
-
         return "REST request failed"
                 + ", requestId=" + requestId
                 + ", method=" + request.getMethod()

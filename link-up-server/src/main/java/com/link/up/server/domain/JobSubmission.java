@@ -1,4 +1,4 @@
-package com.link.up.server.runtime;
+package com.link.up.server.domain;
 
 import com.link.up.framework.job.JobDefinition;
 
@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 控制面提交给 Link-Up Worker 的一次离线执行命令。
+ * Immutable command describing one Worker execution submission.
  */
 public final class JobSubmission {
 

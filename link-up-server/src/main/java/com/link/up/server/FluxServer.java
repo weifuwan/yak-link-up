@@ -2,17 +2,20 @@ package com.link.up.server;
 
 import com.link.up.framework.connector.FactoryRegistry;
 import com.link.up.framework.connector.schema.ConnectorSchemaCatalog;
+import com.link.up.server.application.JobApplication;
+import com.link.up.server.application.JobApplicationService;
+import com.link.up.server.application.port.JobExecutor;
+import com.link.up.server.application.port.JobIdGenerator;
+import com.link.up.server.application.port.JobRepository;
+import com.link.up.server.application.port.JobRuntimeScheduler;
 import com.link.up.server.config.FluxServerConfig;
 import com.link.up.server.http.JettyServer;
+import com.link.up.server.infrastructure.execution.LocalJobExecutor;
+import com.link.up.server.infrastructure.identity.LocalJobIdGenerator;
+import com.link.up.server.infrastructure.persistence.InMemoryJobRepository;
+import com.link.up.server.infrastructure.runtime.LocalJobRuntimeScheduler;
 import com.link.up.server.registration.ControlPlaneRegistrationAgent;
 import com.link.up.server.registration.ControlPlaneRegistrationConfig;
-import com.link.up.server.runtime.InMemoryJobRepository;
-import com.link.up.server.runtime.JobExecutor;
-import com.link.up.server.runtime.JobIdGenerator;
-import com.link.up.server.runtime.JobRepository;
-import com.link.up.server.runtime.LocalJobExecutor;
-import com.link.up.server.runtime.LocalJobIdGenerator;
-import com.link.up.server.runtime.LocalJobManager;
 import com.link.up.server.runtime.WorkerIdentity;
 import com.link.up.server.service.ConnectorRestService;
 import com.link.up.server.service.JobRestService;
@@ -25,7 +28,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Link-Up 单节点离线同步 Worker 启动入口。
+ * Link-Up single-node offline Worker composition root.
  */
 public final class FluxServer {
 
@@ -37,8 +40,7 @@ public final class FluxServer {
     }
 
     private static final Logger LOG =
-            LogManager.getLogger(
-                    FluxServer.class);
+            LogManager.getLogger(FluxServer.class);
 
     private FluxServer() {
     }
@@ -47,16 +49,13 @@ public final class FluxServer {
             throws Exception {
 
         final FluxServerConfig config =
-                FluxServerConfig.fromArgs(
-                        args);
+                FluxServerConfig.fromArgs(args);
 
         List<Path> pluginDirectories =
                 config.getPluginDirectories();
-
         ClassLoader classLoader =
                 Thread.currentThread()
                         .getContextClassLoader();
-
         Path[] pluginPaths =
                 pluginDirectories.toArray(
                         new Path[pluginDirectories.size()]);
@@ -65,20 +64,20 @@ public final class FluxServer {
                 new LocalJobExecutor(
                         classLoader,
                         pluginPaths);
-
         JobRepository repository =
                 new InMemoryJobRepository(
                         config.getHistoryLimit());
-
         JobIdGenerator jobIdGenerator =
                 new LocalJobIdGenerator();
-
-        final LocalJobManager manager =
-                new LocalJobManager(
-                        config.getJobThreads(),
+        JobRuntimeScheduler runtimeScheduler =
+                new LocalJobRuntimeScheduler(
                         config.getMaxQueuedJobs(),
                         config.getShutdownTimeoutMillis(),
-                        jobExecutor,
+                        jobExecutor);
+
+        final JobApplication jobApplication =
+                new JobApplicationService(
+                        runtimeScheduler,
                         repository,
                         jobIdGenerator);
 
@@ -86,12 +85,11 @@ public final class FluxServer {
                 new WorkerIdentity(
                         config.getNodeId(),
                         config.getNodeName(),
-                        WorkerIdentity
-                                .implementationVersion());
+                        WorkerIdentity.implementationVersion());
 
         JobRestService jobService =
                 new JobRestService(
-                        manager,
+                        jobApplication,
                         workerIdentity,
                         config.getJobThreads(),
                         config.getMaxQueuedJobs());
@@ -100,11 +98,9 @@ public final class FluxServer {
                 FactoryRegistry.discover(
                         classLoader,
                         pluginPaths);
-
         ConnectorSchemaCatalog connectorCatalog =
                 ConnectorSchemaCatalog.fromRegistry(
                         connectorRegistry);
-
         ConnectorRestService connectorService =
                 new ConnectorRestService(
                         connectorCatalog,
@@ -118,26 +114,22 @@ public final class FluxServer {
 
         final ControlPlaneRegistrationConfig registrationConfig =
                 ControlPlaneRegistrationConfig.load();
-
         final ControlPlaneRegistrationAgent registrationAgent =
                 new ControlPlaneRegistrationAgent(
                         registrationConfig,
                         jobService,
                         connectorCatalog);
-
         final AtomicBoolean shutdown =
                 new AtomicBoolean(false);
 
         final Runnable shutdownAction =
                 new Runnable() {
+                    @Override
                     public void run() {
-                        if (!shutdown.compareAndSet(
-                                false,
-                                true)) {
+                        if (!shutdown.compareAndSet(false, true)) {
                             return;
                         }
 
-                        // 先注销控制面租约，再停止 HTTP 服务和任务运行时。
                         try {
                             registrationAgent.close();
                         } catch (RuntimeException exception) {
@@ -154,7 +146,7 @@ public final class FluxServer {
                                     exception);
                         }
 
-                        manager.close();
+                        jobApplication.close();
 
                         try {
                             connectorRegistry.close();
@@ -170,10 +162,7 @@ public final class FluxServer {
                 new Thread(
                         shutdownAction,
                         "link-up-shutdown");
-
-        Runtime.getRuntime()
-                .addShutdownHook(
-                        shutdownHook);
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
 
         try {
             server.start();
@@ -197,34 +186,24 @@ public final class FluxServer {
 
             try {
                 Runtime.getRuntime()
-                        .removeShutdownHook(
-                                shutdownHook);
+                        .removeShutdownHook(shutdownHook);
             } catch (IllegalStateException ignored) {
-                // JVM 已经进入关闭流程。
+                // JVM shutdown already started.
             }
         }
     }
 
     private static void configureDefaultLogFile() {
-        if (hasText(
-                System.getProperty(
-                        LOG_FILE_PROPERTY))
-                || hasText(
-                System.getenv(
-                        "LOGFILE"))) {
+        if (hasText(System.getProperty(LOG_FILE_PROPERTY))
+                || hasText(System.getenv("LOGFILE"))) {
             return;
         }
 
         String logDirectory =
-                System.getProperty(
-                        "link.up.log.dir");
-
+                System.getProperty("link.up.log.dir");
         if (!hasText(logDirectory)) {
-            logDirectory =
-                    System.getenv(
-                            "LINK_UP_LOG_DIR");
+            logDirectory = System.getenv("LINK_UP_LOG_DIR");
         }
-
         if (!hasText(logDirectory)) {
             logDirectory = "logs";
         }
@@ -237,11 +216,8 @@ public final class FluxServer {
                         .toString());
     }
 
-    private static boolean hasText(
-            String value) {
-
+    private static boolean hasText(String value) {
         return value != null
-                && !value.trim()
-                .isEmpty();
+                && !value.trim().isEmpty();
     }
 }

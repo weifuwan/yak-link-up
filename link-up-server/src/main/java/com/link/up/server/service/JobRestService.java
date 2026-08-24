@@ -8,6 +8,8 @@ import com.link.up.api.job.JobSpec;
 import com.link.up.framework.job.JobConfigParser;
 import com.link.up.framework.job.JobDefinition;
 import com.link.up.framework.job.JobSpecCompiler;
+import com.link.up.server.application.JobApplication;
+import com.link.up.server.domain.JobSubmission;
 import com.link.up.server.dto.JobLogPageResponse;
 import com.link.up.server.dto.JobResponse;
 import com.link.up.server.dto.JobSubmitRequest;
@@ -15,12 +17,11 @@ import com.link.up.server.dto.PageResponse;
 import com.link.up.server.dto.PipelineResponse;
 import com.link.up.server.dto.WorkerNodeResponse;
 import com.link.up.server.runtime.JobExecutionMetadata;
-import com.link.up.server.runtime.JobManager;
 import com.link.up.server.runtime.JobSnapshot;
-import com.link.up.server.runtime.JobSubmission;
 import com.link.up.server.runtime.ServerJobStatus;
 import com.link.up.server.runtime.WorkerIdentity;
 import com.typesafe.config.ConfigException;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -30,11 +31,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
-/** REST inputs to single-node offline Worker runtime adapter. */
+/** REST inputs to the single-node offline Worker application boundary. */
 public final class JobRestService {
     private static final int MAX_PAGE_SIZE = 200;
 
-    private final JobManager manager;
+    private final JobApplication manager;
     private final JobConfigParser hoconParser;
     private final JobSpecCompiler jobSpecCompiler;
     private final ObjectMapper protocolMapper;
@@ -43,14 +44,14 @@ public final class JobRestService {
     private final int maxConcurrentJobs;
     private final int maxQueuedJobs;
 
-    public JobRestService(JobManager manager) {
+    public JobRestService(JobApplication manager) {
         this(manager,
                 new WorkerIdentity("embedded-link-up-node", "Embedded Link-Up Offline Worker",
                         WorkerIdentity.implementationVersion()),
                 1, 1);
     }
 
-    public JobRestService(JobManager manager, WorkerIdentity workerIdentity,
+    public JobRestService(JobApplication manager, WorkerIdentity workerIdentity,
                           int maxConcurrentJobs, int maxQueuedJobs) {
         this.manager = manager;
         this.hoconParser = new JobConfigParser();
@@ -135,8 +136,7 @@ public final class JobRestService {
             int limit) {
 
         JobSnapshot snapshot = manager.getJob(jobId);
-        JobExecutionMetadata metadata =
-                manager.getMetadata(jobId);
+        JobExecutionMetadata metadata = manager.getMetadata(jobId);
 
         return jobLogReader.read(
                 jobId,

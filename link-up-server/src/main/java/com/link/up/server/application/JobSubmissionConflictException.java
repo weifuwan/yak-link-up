@@ -1,7 +1,8 @@
-package com.link.up.server.runtime;
+package com.link.up.server.application;
 
 /**
- * 相同幂等键或外部执行 ID 被用于不同提交内容。
+ * The same idempotency key or external execution ID was reused with
+ * different submission content.
  */
 public final class JobSubmissionConflictException
         extends RuntimeException {

@@ -1,5 +1,6 @@
-package com.link.up.server.runtime;
+package com.link.up.server.domain;
 
+import com.link.up.server.runtime.ServerJobStatus;
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;

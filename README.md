@@ -52,6 +52,17 @@ JobExecution
                  -> TaskExecutor
 ```
 
+The standalone Worker control plane uses a separate application/domain/infrastructure boundary:
+
+```text
+HTTP / registration
+    -> JobApplication
+       -> JobApplicationService
+          -> JobExecutionState
+          -> application ports
+             -> LocalJobRuntimeScheduler / LocalJobExecutor / InMemoryJobRepository
+```
+
 Built-in connectors use the same role vocabulary for their internal structure:
 
 ```text
@@ -64,15 +75,16 @@ an explicit temporary migration allowlist and must not grow.
 
 `JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `SourceCoordinator` owns the
 framework side of Enumerator lifecycle/validation, while `JobPlanner` only builds topology from validated splits.
-`JobCoordinator` owns the job lifecycle and result aggregation, while scheduler/executor roles own pipeline concurrency
-and execution separately.
+`JobCoordinator` owns the framework run lifecycle, while Server `JobApplicationService` owns Worker submission/query/cancel
+use cases and delegates local threads/admission to `JobRuntimeScheduler`.
 
 See [architecture](docs/architecture.md),
 [ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md),
 [ADR-0002](docs/adr/0002-jobgraph-executiongraph.md),
 [ADR-0003](docs/adr/0003-runtime-role-separation.md),
 [ADR-0004](docs/adr/0004-source-enumerator-coordination.md),
-[ADR-0005](docs/adr/0005-connector-package-roles.md), and the
+[ADR-0005](docs/adr/0005-connector-package-roles.md),
+[ADR-0006](docs/adr/0006-server-control-plane-boundaries.md), and the
 [connector development guide](docs/connector-development.md).
 
 ## Quick start
