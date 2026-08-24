@@ -25,16 +25,30 @@ The rules are intentionally strict:
 - `link-up-launcher` and `link-up-server` are composition roots that assemble the framework with concrete connectors.
 
 The runtime architecture is Flink-inspired at the role level (`Source`, `SourceReader`, `SourceSplit`, planner, task runtime),
-without copying Flink's distributed complexity. The core lifecycle is now explicit:
+without copying Flink's distributed complexity. The model lifecycle is explicit:
 
 ```text
 JobSpec -> JobDefinition -> PreparedJob -> JobGraph -> ExecutionGraph -> JobResult
 ```
 
-`JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run, including cancellation,
-metrics, timestamps, status, and the terminal result. See [architecture](docs/architecture.md),
+Runtime responsibilities are also separated by role:
+
+```text
+JobExecution
+  -> JobCoordinator
+     -> PipelineScheduler
+        -> PipelineExecutor
+           -> PipelineExecution
+              -> ExecutionCoordinator
+                 -> TaskExecutor
+```
+
+`JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `JobCoordinator` owns the
+job lifecycle and result aggregation, while scheduler/executor roles own pipeline concurrency and execution separately.
+See [architecture](docs/architecture.md),
 [ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md),
-[ADR-0002](docs/adr/0002-jobgraph-executiongraph.md), and the
+[ADR-0002](docs/adr/0002-jobgraph-executiongraph.md),
+[ADR-0003](docs/adr/0003-runtime-role-separation.md), and the
 [connector development guide](docs/connector-development.md).
 
 ## Quick start
