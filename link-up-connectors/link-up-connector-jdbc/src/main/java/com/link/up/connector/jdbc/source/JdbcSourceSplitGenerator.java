@@ -3,6 +3,7 @@ package com.link.up.connector.jdbc.source;
 import com.link.up.api.source.SourceSplitEnumerator;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.connector.jdbc.catalog.JdbcCatalogUtils;
 import com.link.up.connector.jdbc.config.JdbcSourceConfig;
 import com.link.up.connector.jdbc.config.SplitPlanningMode;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
@@ -10,7 +11,6 @@ import com.link.up.connector.jdbc.core.dialect.JdbcDialectLoader;
 import com.link.up.connector.jdbc.core.split.JdbcSplitStatistics;
 import com.link.up.connector.jdbc.core.split.JdbcSplitStatisticsProvider;
 import com.link.up.connector.jdbc.core.split.JdbcSplitStatisticsRequest;
-import com.link.up.connector.jdbc.utils.JdbcCatalogUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

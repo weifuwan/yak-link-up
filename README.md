@@ -52,6 +52,16 @@ JobExecution
                  -> TaskExecutor
 ```
 
+Built-in connectors use the same role vocabulary for their internal structure:
+
+```text
+source / sink / catalog / client / config / converter / internal
+```
+
+Connector-specific role packages such as JDBC `dialect` and `split` are valid; new generic root packages such as
+`common`, `core`, `helper`, `misc`, and `utils` are not. The historical JDBC `core/{converter,dialect,split}` subtree is
+an explicit temporary migration allowlist and must not grow.
+
 `JobGraph` is the immutable physical plan; `ExecutionGraph` owns mutable state for one run. `SourceCoordinator` owns the
 framework side of Enumerator lifecycle/validation, while `JobPlanner` only builds topology from validated splits.
 `JobCoordinator` owns the job lifecycle and result aggregation, while scheduler/executor roles own pipeline concurrency
@@ -61,7 +71,8 @@ See [architecture](docs/architecture.md),
 [ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md),
 [ADR-0002](docs/adr/0002-jobgraph-executiongraph.md),
 [ADR-0003](docs/adr/0003-runtime-role-separation.md),
-[ADR-0004](docs/adr/0004-source-enumerator-coordination.md), and the
+[ADR-0004](docs/adr/0004-source-enumerator-coordination.md),
+[ADR-0005](docs/adr/0005-connector-package-roles.md), and the
 [connector development guide](docs/connector-development.md).
 
 ## Quick start

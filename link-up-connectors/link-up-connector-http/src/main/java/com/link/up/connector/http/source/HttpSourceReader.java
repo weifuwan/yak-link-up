@@ -8,7 +8,7 @@ import com.link.up.api.table.type.FluxRow;
 import com.link.up.connector.http.client.HttpSourceClient;
 import com.link.up.connector.http.config.HttpSourceConfig;
 import com.link.up.connector.http.config.PageType;
-import com.link.up.connector.http.parser.HttpResponseParser;
+import com.link.up.connector.http.converter.HttpResponseParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -274,8 +274,6 @@ public final class HttpSourceReader
 
         return result;
     }
-
-    // ── 占位符替换 ──────────────────────────────────────────
 
     private static void replacePlaceholder(
             Map<String, String> map,

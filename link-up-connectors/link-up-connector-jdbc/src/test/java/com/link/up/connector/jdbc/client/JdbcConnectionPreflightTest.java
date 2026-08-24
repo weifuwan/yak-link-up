@@ -1,4 +1,4 @@
-package com.link.up.connector.jdbc.utils;
+package com.link.up.connector.jdbc.client;
 
 import com.link.up.api.configuration.ReadonlyConfig;
 import org.junit.Test;
@@ -57,7 +57,7 @@ public class JdbcConnectionPreflightTest {
                             .getContextClassLoader());
             fail("Expected JDBC preflight failure");
         } catch (Exception expected) {
-            // 连接拒绝或超时即证明失败路径被正确传播。
+            // Connection refusal or timeout proves the failure is propagated.
         }
     }
 
@@ -77,7 +77,6 @@ public class JdbcConnectionPreflightTest {
                 "connection_check_timeout_sec",
                 Integer.valueOf(2));
 
-        return ReadonlyConfig.fromMap(
-                values);
+        return ReadonlyConfig.fromMap(values);
     }
 }

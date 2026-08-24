@@ -1,6 +1,5 @@
-package com.link.up.connector.http.parser;
+package com.link.up.connector.http.converter;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -11,13 +10,10 @@ import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.TableSchema;
-import com.link.up.api.table.type.BasicType;
 import com.link.up.api.table.type.SqlType;
 import com.link.up.api.table.type.FluxRow;
 import com.link.up.connector.http.config.HttpFormat;
 import com.link.up.connector.http.config.HttpSourceConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -30,18 +26,13 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * HTTP 响应解析器。
+ * Converts HTTP response payloads into Link-Up rows and pagination values.
  *
- * <p>支持两种 JSON 提取模式：
- * <ul>
- *   <li><b>content_field</b>：提取 JSON 数组，每个元素映射为一行</li>
- *   <li><b>json_field</b>：每个字段独立提取值数组，按行对齐</li>
- * </ul>
+ * <p>The class is kept under the connector {@code converter} role because it
+ * translates external representations into Link-Up row/schema values; HTTP I/O
+ * remains in the client/reader roles.</p>
  */
 public final class HttpResponseParser {
-
-    private static final Logger LOG =
-            LoggerFactory.getLogger(HttpResponseParser.class);
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -55,9 +46,6 @@ public final class HttpResponseParser {
     private HttpResponseParser() {
     }
 
-    /**
-     * 解析 HTTP 响应为 FluxRow 列表。
-     */
     public static List<FluxRow> parseResponse(
             String responseBody,
             HttpSourceConfig config,
@@ -67,15 +55,12 @@ public final class HttpResponseParser {
             return parseTextResponse(responseBody, config);
         }
 
-        // JSON 格式
         if (!config.getJsonField().isEmpty()) {
             return parseByJsonField(responseBody, config, schema);
         }
 
         return parseByContentField(responseBody, config, schema);
     }
-
-    // ── TEXT 格式 ──────────────────────────────────────────
 
     private static List<FluxRow> parseTextResponse(
             String responseBody,
@@ -99,8 +84,6 @@ public final class HttpResponseParser {
 
         return Collections.singletonList(FluxRow.of(responseBody));
     }
-
-    // ── JSON content_field 模式 ──────────────────────────────
 
     private static List<FluxRow> parseByContentField(
             String responseBody,
@@ -135,11 +118,8 @@ public final class HttpResponseParser {
                     mapJsonNodeToRow(dataNode, schema, config.isJsonFieldMissedReturnNull()));
         }
 
-        // 基本类型值（如字符串、数字）
         return Collections.singletonList(FluxRow.of(jsonNodeToJavaValue(dataNode)));
     }
-
-    // ── JSON json_field 模式 ─────────────────────────────────
 
     private static List<FluxRow> parseByJsonField(
             String responseBody,
@@ -149,7 +129,6 @@ public final class HttpResponseParser {
         JsonNode root = MAPPER.readTree(responseBody);
         Map<String, Object> jsonFieldMapping = config.getJsonField();
 
-        // 每个字段提取值列表
         List<String> fieldNames = schema.getColumns().stream()
                 .map(Column::getName)
                 .collect(Collectors.toList());
@@ -164,7 +143,6 @@ public final class HttpResponseParser {
             if (jsonPath != null && !jsonPath.isEmpty()) {
                 values = extractJsonPathValues(root, jsonPath);
             } else {
-                // 没有配置 JsonPath，尝试直接用字段名从根对象取值
                 values = extractDirectField(root, fieldName);
             }
 
@@ -176,7 +154,6 @@ public final class HttpResponseParser {
             return Collections.emptyList();
         }
 
-        // 按行对齐
         List<FluxRow> rows = new ArrayList<>(maxLen);
         for (int i = 0; i < maxLen; i++) {
             FluxRow row = new FluxRow(fieldNames.size());
@@ -192,15 +169,6 @@ public final class HttpResponseParser {
         return rows;
     }
 
-    /**
-     * 从 JSON 响应中提取单个字符串值。
-     *
-     * <p>用于 Cursor 分页时从响应中提取游标值。
-     *
-     * @param responseBody JSON 响应体
-     * @param jsonPath     JsonPath 表达式
-     * @return 提取的字符串值，未找到时返回 null
-     */
     public static String extractSingleStringValue(
             String responseBody,
             String jsonPath) throws Exception {
@@ -227,8 +195,6 @@ public final class HttpResponseParser {
 
         return String.valueOf(result);
     }
-
-    // ── JsonPath 工具 ──────────────────────────────────────────
 
     private static JsonNode evaluateJsonPath(JsonNode root, String jsonPath) {
         String normalized = normalizeJsonPath(jsonPath);
@@ -286,18 +252,12 @@ public final class HttpResponseParser {
         return Collections.emptyList();
     }
 
-    /**
-     * 将 JsonPath 中的 {@code *} 通配符转换为标准 {@code [*]} 语法。
-     */
     private static String normalizeJsonPath(String path) {
         if (path == null) {
             return "$";
         }
-        // $.store.book.* → $.store.book[*]
         return path.replaceAll("\\.\\*", "[*]");
     }
-
-    // ── JSON → FluxRow 映射 ──────────────────────────────────
 
     private static FluxRow mapJsonNodeToRow(
             JsonNode node,
@@ -325,8 +285,6 @@ public final class HttpResponseParser {
         return row;
     }
 
-    // ── 类型转换 ──────────────────────────────────────────
-
     private static Object jsonNodeToJavaValue(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return null;
@@ -344,7 +302,6 @@ public final class HttpResponseParser {
                 return node.asText();
             }
         }
-        // 复杂类型（对象、数组）序列化为字符串
         return node.toString();
     }
 
@@ -358,55 +315,42 @@ public final class HttpResponseParser {
         switch (sqlType) {
             case STRING:
                 return String.valueOf(value);
-
             case BOOLEAN:
                 if (value instanceof Boolean) return value;
                 return Boolean.parseBoolean(String.valueOf(value));
-
             case TINYINT:
                 if (value instanceof Number) return ((Number) value).byteValue();
                 return Byte.parseByte(String.valueOf(value));
-
             case SMALLINT:
                 if (value instanceof Number) return ((Number) value).shortValue();
                 return Short.parseShort(String.valueOf(value));
-
             case INT:
                 if (value instanceof Number) return ((Number) value).intValue();
                 return Integer.parseInt(String.valueOf(value));
-
             case BIGINT:
                 if (value instanceof Number) return ((Number) value).longValue();
                 return Long.parseLong(String.valueOf(value));
-
             case FLOAT:
                 if (value instanceof Number) return ((Number) value).floatValue();
                 return Float.parseFloat(String.valueOf(value));
-
             case DOUBLE:
                 if (value instanceof Number) return ((Number) value).doubleValue();
                 return Double.parseDouble(String.valueOf(value));
-
             case DECIMAL:
                 if (value instanceof BigDecimal) return value;
                 return new BigDecimal(String.valueOf(value));
-
             case DATE:
                 if (value instanceof LocalDate) return value;
                 return LocalDate.parse(String.valueOf(value));
-
             case TIME:
                 if (value instanceof LocalTime) return value;
                 return LocalTime.parse(String.valueOf(value));
-
             case TIMESTAMP:
                 if (value instanceof LocalDateTime) return value;
                 return LocalDateTime.parse(String.valueOf(value));
-
             case BYTES:
                 if (value instanceof byte[]) return value;
                 return String.valueOf(value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
             default:
                 return String.valueOf(value);
         }

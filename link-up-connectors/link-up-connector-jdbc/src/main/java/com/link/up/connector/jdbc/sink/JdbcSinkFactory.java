@@ -10,10 +10,10 @@ import com.link.up.api.sink.PreparedSinkMetadata;
 import com.link.up.api.sink.SinkPreparer;
 import com.link.up.api.sink.SinkWriter;
 import com.link.up.api.table.type.FluxRow;
+import com.link.up.connector.jdbc.client.JdbcConnectionPreflight;
 import com.link.up.connector.jdbc.config.JdbcCommonOptions;
 import com.link.up.connector.jdbc.config.JdbcSinkConfig;
 import com.link.up.connector.jdbc.config.JdbcSinkOptions;
-import com.link.up.connector.jdbc.utils.JdbcConnectionPreflight;
 
 import java.util.Collections;
 import java.util.EnumSet;
@@ -49,10 +49,7 @@ public final class JdbcSinkFactory
             ClassLoader classLoader)
             throws Exception {
 
-        // 解析 Sink 规则，但不创建 Preparer/Writer，也不执行建表或写入。
-        JdbcSinkConfig.of(
-                options);
-
+        JdbcSinkConfig.of(options);
         JdbcConnectionPreflight.validate(
                 options,
                 classLoader);
@@ -87,8 +84,7 @@ public final class JdbcSinkFactory
             ReadonlyConfig config) {
 
         return new JdbcSinkPreparer(
-                JdbcSinkConfig.of(
-                        config));
+                JdbcSinkConfig.of(config));
     }
 
     @Override
@@ -97,8 +93,7 @@ public final class JdbcSinkFactory
             PreparedSinkMetadata metadata) {
 
         return new JdbcSinkWriter(
-                JdbcSinkConfig.of(
-                        config),
+                JdbcSinkConfig.of(config),
                 metadata);
     }
 }
