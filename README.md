@@ -1,27 +1,33 @@
 # Link-Up
 
-Link-Up is a local, batch-oriented data synchronization engine. It currently provides JDBC source and sink
-connectors, HOCON job parsing, parallel source/sink execution, and execution metrics.
+Link-Up is a local, batch-oriented data synchronization engine. It currently provides JDBC source and sink connectors,
+HOCON job parsing, parallel source/sink execution, execution metrics, and a standalone Worker API.
 
-## Module architecture
+## Architecture
 
-The project is organized around dependency direction instead of technical catch-all modules:
+The project is organized around explicit dependency boundaries instead of technical catch-all modules:
 
 ```text
-link-up-api          public connector, table, configuration, and error contracts
-        ↑
-link-up-framework    job planning, scheduling, channels, execution, and metrics
-        ↑
-link-up-connectors   connector implementations (for example, JDBC)
-        ↑
-link-up-launcher     executable assembly and local CLI entry point
+                    link-up-launcher / link-up-server
+                       /                     \
+                      v                       v
+             link-up-framework        connector implementations
+                      \                       /
+                       v                     v
+                           link-up-api
 ```
 
-`link-up-api` is the only extension-facing dependency. It owns the shared error contract
-(`FluxRuntimeException`, `FluxErrorCode`, and API error codes), removing the former generic
-`common` module. `link-up-framework` is the runtime module (the renamed and consolidated core/engine responsibility);
-connectors depend on API contracts but not on framework internals. The connector aggregator contains no inherited
-runtime dependencies—each connector declares the libraries it needs explicitly.
+The rules are intentionally strict:
+
+- `link-up-api` is the stable extension-facing contract. It must not depend on framework, server, launcher, or concrete connectors.
+- `link-up-framework` implements planning and local runtime behavior and depends only on API contracts, never on concrete connector modules.
+- connector modules depend on `link-up-api`, not on framework internals.
+- `link-up-launcher` and `link-up-server` are composition roots that assemble the framework with concrete connectors.
+
+The runtime architecture is Flink-inspired at the role level (`Source`, `SourceReader`, `SourceSplit`, planner, task runtime),
+without copying Flink's distributed complexity. See [architecture](docs/architecture.md),
+[ADR-0001](docs/adr/0001-flink-inspired-runtime-roles.md), and the
+[connector development guide](docs/connector-development.md).
 
 ## Quick start
 
