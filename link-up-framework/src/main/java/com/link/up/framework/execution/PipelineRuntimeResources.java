@@ -84,13 +84,7 @@ final class PipelineRuntimeResources<SplitT extends SourceSplit>
 
     @Override
     public void close() {
-        for (DataChannel<RecordEnvelope<FluxRow>> channel : channels) {
-            try {
-                channel.close();
-            } catch (Throwable ignored) {
-                // Best-effort close after the pipeline outcome is known.
-            }
-        }
+        closeChannels(channels);
     }
 
     private static <SplitT extends SourceSplit> SplitProvider<SplitT>
@@ -113,26 +107,47 @@ final class PipelineRuntimeResources<SplitT extends SourceSplit>
                 new ArrayList<DataChannel<RecordEnvelope<FluxRow>>>(
                         graph.getSinkTaskPlans().size());
 
-        for (int index = 0;
-             index < graph.getSinkTaskPlans().size();
-             index++) {
+        try {
+            for (int index = 0;
+                 index < graph.getSinkTaskPlans().size();
+                 index++) {
 
-            LocalDataChannel<RecordEnvelope<FluxRow>> channel =
-                    new LocalDataChannel<RecordEnvelope<FluxRow>>(
-                            graph.getPipelineId()
-                                    + "-source-to-sink-"
-                                    + index,
-                            config.getMaxBufferedBatches(),
-                            config.getMaxBufferedRecords(),
-                            config.getMaxBufferedBytes(),
-                            config.getMaxRecordsPerSecond(),
-                            config.getMaxBytesPerSecond(),
-                            graph.getSourceTaskPlans().size());
+                LocalDataChannel<RecordEnvelope<FluxRow>> channel =
+                        new LocalDataChannel<RecordEnvelope<FluxRow>>(
+                                graph.getPipelineId()
+                                        + "-source-to-sink-"
+                                        + index,
+                                config.getMaxBufferedBatches(),
+                                config.getMaxBufferedRecords(),
+                                config.getMaxBufferedBytes(),
+                                config.getMaxRecordsPerSecond(),
+                                config.getMaxBytesPerSecond(),
+                                graph.getSourceTaskPlans().size());
 
-            channels.add(channel);
-            metrics.registerChannel(channel.getMetrics());
+                channels.add(channel);
+                metrics.registerChannel(channel.getMetrics());
+            }
+
+            return channels;
+
+        } catch (RuntimeException failure) {
+            closeChannels(channels);
+            throw failure;
+        } catch (Error failure) {
+            closeChannels(channels);
+            throw failure;
         }
+    }
 
-        return channels;
+    private static void closeChannels(
+            List<DataChannel<RecordEnvelope<FluxRow>>> channels) {
+
+        for (DataChannel<RecordEnvelope<FluxRow>> channel : channels) {
+            try {
+                channel.close();
+            } catch (Throwable ignored) {
+                // Best-effort cleanup; the primary outcome is preserved.
+            }
+        }
     }
 }
