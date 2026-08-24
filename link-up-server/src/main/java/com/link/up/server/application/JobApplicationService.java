@@ -7,8 +7,10 @@ import com.link.up.server.application.port.JobIdGenerator;
 import com.link.up.server.application.port.JobRepository;
 import com.link.up.server.application.port.JobRepositoryEntry;
 import com.link.up.server.application.port.JobRuntimeScheduler;
+import com.link.up.server.domain.JobExecutionAttempt;
 import com.link.up.server.domain.JobExecutionState;
 import com.link.up.server.domain.JobSubmission;
+import com.link.up.server.runtime.JobAttemptMetadata;
 import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobRecoverySnapshotFactory;
 import com.link.up.server.runtime.JobSnapshot;
@@ -27,9 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Single-node Worker application service with durable control-plane checkpoints. */
-public final class JobApplicationService
-        implements JobApplication {
+/** Single-node Worker application service with durable checkpoints and safe manual retry. */
+public final class JobApplicationService implements JobApplication {
 
     private static final String RESTART_LOST_REASON =
             "Worker restarted before the job reached a terminal state";
@@ -38,6 +39,7 @@ public final class JobApplicationService
     private final JobRepository repository;
     private final JobIdGenerator jobIdGenerator;
     private final JobSubmissionRegistry submissionRegistry;
+    private final JobRetryPolicy retryPolicy = new JobRetryPolicy();
     private final ConcurrentMap<String, JobExecutionState> activeJobs =
             new ConcurrentHashMap<String, JobExecutionState>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -57,7 +59,6 @@ public final class JobApplicationService
                 jobIdGenerator,
                 "jobIdGenerator must not be null");
         this.submissionRegistry = new JobSubmissionRegistry();
-
         recoverPersistedJobs();
     }
 
@@ -67,13 +68,9 @@ public final class JobApplicationService
     }
 
     @Override
-    public synchronized JobSnapshot submit(
-            final JobSubmission submission) {
-
+    public synchronized JobSnapshot submit(final JobSubmission submission) {
         ensureOpen();
-        Objects.requireNonNull(
-                submission,
-                "submission must not be null");
+        Objects.requireNonNull(submission, "submission must not be null");
 
         JobSnapshot existing = findExistingSubmission(submission);
         if (existing != null) {
@@ -81,14 +78,11 @@ public final class JobApplicationService
         }
 
         final String jobId = jobIdGenerator.nextId();
-        final JobExecutionState state =
-                new JobExecutionState(jobId, submission);
+        final JobExecutionState state = new JobExecutionState(jobId, submission);
 
-        JobExecutionState previous =
-                activeJobs.putIfAbsent(jobId, state);
+        JobExecutionState previous = activeJobs.putIfAbsent(jobId, state);
         if (previous != null) {
-            throw new IllegalStateException(
-                    "Duplicate jobId: " + jobId);
+            throw new IllegalStateException("Duplicate jobId: " + jobId);
         }
 
         try {
@@ -109,9 +103,121 @@ public final class JobApplicationService
         return snapshot(state);
     }
 
-    private JobRuntimeScheduler.Listener listener(
-            final JobExecutionState state) {
+    @Override
+    public synchronized JobSnapshot retry(
+            String jobId,
+            JobSubmission submission) {
 
+        ensureOpen();
+        String normalizedJobId = requireText(jobId, "jobId");
+        Objects.requireNonNull(submission, "submission must not be null");
+
+        if (activeJobs.containsKey(normalizedJobId)) {
+            throw new JobRetryNotAllowedException(
+                    retryDecision(normalizedJobId));
+        }
+
+        JobSnapshot previousSnapshot = repository.get(normalizedJobId);
+        if (previousSnapshot == null) {
+            throw new JobNotFoundException(normalizedJobId);
+        }
+        JobExecutionMetadata previousMetadata =
+                repository.getMetadata(normalizedJobId);
+
+        JobRetryDecision decision =
+                retryPolicy.evaluate(previousSnapshot, previousMetadata);
+        if (!decision.isEligible()) {
+            throw new JobRetryNotAllowedException(decision);
+        }
+
+        validateRetrySubmission(previousMetadata, submission);
+
+        List<JobExecutionAttempt> previousAttempts =
+                new ArrayList<JobExecutionAttempt>();
+        for (JobAttemptMetadata attempt : previousMetadata.getAttempts()) {
+            previousAttempts.add(attempt.toDomain());
+        }
+
+        final JobExecutionState state =
+                JobExecutionState.retryFrom(
+                        normalizedJobId,
+                        submission,
+                        previousSnapshot.getCreateTimeMillis(),
+                        previousMetadata.getSubmittedTimeMillis(),
+                        previousMetadata.getStateVersion(),
+                        previousMetadata.getCheckpointVersion(),
+                        previousSnapshot.getStatus(),
+                        previousMetadata.getTransitions(),
+                        previousAttempts);
+
+        JobExecutionState active = activeJobs.putIfAbsent(
+                normalizedJobId,
+                state);
+        if (active != null) {
+            throw new JobRetryNotAllowedException(
+                    retryPolicy.evaluate(
+                            snapshot(active),
+                            JobExecutionMetadata.fromState(active)));
+        }
+
+        checkpoint(state);
+        try {
+            runtimeScheduler.schedule(
+                    normalizedJobId,
+                    submission.getDefinition(),
+                    listener(state));
+        } catch (RuntimeException failure) {
+            if (activeJobs.get(normalizedJobId) == state) {
+                state.failBeforeExecution(failure);
+                repository.save(
+                        snapshot(state),
+                        JobExecutionMetadata.fromState(state));
+                activeJobs.remove(normalizedJobId, state);
+            }
+            throw failure;
+        }
+
+        return snapshot(state);
+    }
+
+    @Override
+    public JobRetryDecision retryDecision(String jobId) {
+        String normalizedJobId = requireText(jobId, "jobId");
+        JobExecutionState active = activeJobs.get(normalizedJobId);
+        if (active != null) {
+            return retryPolicy.evaluate(
+                    snapshot(active),
+                    JobExecutionMetadata.fromState(active));
+        }
+
+        JobSnapshot snapshot = repository.get(normalizedJobId);
+        if (snapshot == null) {
+            throw new JobNotFoundException(normalizedJobId);
+        }
+        return retryPolicy.evaluate(
+                snapshot,
+                repository.getMetadata(normalizedJobId));
+    }
+
+    private void validateRetrySubmission(
+            JobExecutionMetadata metadata,
+            JobSubmission submission) {
+
+        if (metadata == null
+                || !submission.getExternalExecutionId()
+                .equals(metadata.getExternalExecutionId())
+                || !submission.getIdempotencyKey()
+                .equals(metadata.getIdempotencyKey())
+                || submission.getDefinitionVersion()
+                != metadata.getDefinitionVersion()
+                || !submission.getConfigDigest()
+                .equals(metadata.getConfigDigest())) {
+            throw new JobSubmissionConflictException(
+                    "Retry request must use the same externalExecutionId, idempotencyKey, definitionVersion and job content");
+        }
+    }
+
+    private JobRuntimeScheduler.Listener listener(final JobExecutionState state) {
         return new JobRuntimeScheduler.Listener() {
             @Override
             public void onQueued() {
@@ -141,7 +247,6 @@ public final class JobApplicationService
                     JobResult result,
                     Throwable failure,
                     boolean cancellationLike) {
-
                 completeAndArchive(
                         state,
                         terminalStatus(
@@ -169,22 +274,17 @@ public final class JobApplicationService
     }
 
     private void recoverPersistedJobs() {
-        List<JobRepositoryEntry> persisted =
-                repository.listEntries();
-
+        List<JobRepositoryEntry> persisted = repository.listEntries();
         for (JobRepositoryEntry entry : persisted) {
             JobSnapshot snapshot = entry.getSnapshot();
             JobExecutionMetadata metadata = entry.getMetadata();
 
             if (metadata != null) {
-                submissionRegistry.restore(
-                        snapshot.getJobId(),
-                        metadata);
+                submissionRegistry.restore(snapshot.getJobId(), metadata);
             }
 
             if (!snapshot.getStatus().isTerminal()) {
-                long recoveryTimeMillis =
-                        System.currentTimeMillis();
+                long recoveryTimeMillis = System.currentTimeMillis();
                 JobSnapshot lost =
                         JobRecoverySnapshotFactory.recoverLost(
                                 snapshot,
@@ -202,9 +302,7 @@ public final class JobApplicationService
         }
     }
 
-    private JobSnapshot findExistingSubmission(
-            JobSubmission submission) {
-
+    private JobSnapshot findExistingSubmission(JobSubmission submission) {
         String jobId = submissionRegistry.lookup(submission);
         if (jobId == null) {
             return null;
@@ -239,11 +337,9 @@ public final class JobApplicationService
             JobResult result,
             Throwable failure,
             boolean cancellationLike) {
-
         if (state.isCancellationRequested()
                 || cancellationLike
-                || result != null
-                && result.getStatus() == JobStatus.CANCELED) {
+                || result != null && result.getStatus() == JobStatus.CANCELED) {
             return ServerJobStatus.CANCELED;
         }
         if (result != null
@@ -259,17 +355,13 @@ public final class JobApplicationService
             JobResult result,
             Throwable failure,
             boolean cancellationLike) {
-
-        if (state.isCancellationRequested()
-                || cancellationLike) {
+        if (state.isCancellationRequested() || cancellationLike) {
             return null;
         }
         if (failure != null) {
             return failure;
         }
-        return result == null
-                ? null
-                : result.getFailure();
+        return result == null ? null : result.getFailure();
     }
 
     private void completeAndArchive(
@@ -277,11 +369,9 @@ public final class JobApplicationService
             ServerJobStatus status,
             JobResult result,
             Throwable failure) {
-
         if (!state.complete(status, result, failure)) {
             return;
         }
-
         repository.save(
                 snapshot(state),
                 JobExecutionMetadata.fromState(state));
@@ -297,8 +387,7 @@ public final class JobApplicationService
     private JobSnapshot snapshot(JobExecutionState state) {
         return JobSnapshotFactory.create(
                 state,
-                runtimeScheduler.getMetrics(
-                        state.getJobId()));
+                runtimeScheduler.getMetrics(state.getJobId()));
     }
 
     @Override
@@ -316,15 +405,11 @@ public final class JobApplicationService
     }
 
     @Override
-    public JobSnapshot getJobByExternalExecutionId(
-            String externalExecutionId) {
-
+    public JobSnapshot getJobByExternalExecutionId(String externalExecutionId) {
         String externalId = requireText(
                 externalExecutionId,
                 "externalExecutionId");
-        String jobId =
-                submissionRegistry.findByExternalExecutionId(
-                        externalId);
+        String jobId = submissionRegistry.findByExternalExecutionId(externalId);
         if (jobId == null) {
             throw new JobNotFoundException(externalId);
         }
@@ -358,9 +443,7 @@ public final class JobApplicationService
                 result,
                 new Comparator<JobSnapshot>() {
                     @Override
-                    public int compare(
-                            JobSnapshot left,
-                            JobSnapshot right) {
+                    public int compare(JobSnapshot left, JobSnapshot right) {
                         return Long.compare(
                                 right.getCreateTimeMillis(),
                                 left.getCreateTimeMillis());
@@ -376,9 +459,7 @@ public final class JobApplicationService
         if (state == null) {
             JobSnapshot finished = repository.get(jobId);
             if (finished != null) {
-                throw new JobStateConflictException(
-                        jobId,
-                        finished.getStatus());
+                throw new JobStateConflictException(jobId, finished.getStatus());
             }
             throw new JobNotFoundException(jobId);
         }
@@ -444,17 +525,13 @@ public final class JobApplicationService
 
     private void ensureOpen() {
         if (closed.get() || runtimeScheduler.isClosed()) {
-            throw new IllegalStateException(
-                    "Job application is closed");
+            throw new IllegalStateException("Job application is closed");
         }
     }
 
-    private static String requireText(
-            String value,
-            String name) {
+    private static String requireText(String value, String name) {
         if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(
-                    name + " must not be blank");
+            throw new IllegalArgumentException(name + " must not be blank");
         }
         return value.trim();
     }

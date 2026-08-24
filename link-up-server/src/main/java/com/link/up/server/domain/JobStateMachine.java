@@ -4,9 +4,7 @@ import com.link.up.server.runtime.ServerJobStatus;
 
 import java.util.EnumSet;
 
-/**
- * Pure control-plane lifecycle rules for one offline job execution.
- */
+/** Pure control-plane lifecycle rules for the current attempt of one stable Job. */
 public final class JobStateMachine {
 
     private JobStateMachine() {
@@ -57,13 +55,32 @@ public final class JobStateMachine {
         }
     }
 
+    /** Retry is a deliberate new-attempt transition, not a normal lifecycle transition. */
+    public static boolean canRetryTransition(
+            ServerJobStatus from,
+            ServerJobStatus to) {
+        return from == ServerJobStatus.FAILED
+                && to == ServerJobStatus.SUBMITTED;
+    }
+
     public static void requireTransition(
             ServerJobStatus from,
             ServerJobStatus to) {
-
         if (!canTransition(from, to)) {
             throw new IllegalStateException(
                     "Illegal job state transition: "
+                            + from
+                            + " -> "
+                            + to);
+        }
+    }
+
+    public static void requireRetryTransition(
+            ServerJobStatus from,
+            ServerJobStatus to) {
+        if (!canRetryTransition(from, to)) {
+            throw new IllegalStateException(
+                    "Illegal retry state transition: "
                             + from
                             + " -> "
                             + to);

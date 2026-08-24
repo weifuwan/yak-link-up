@@ -11,7 +11,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Mutable control-plane state for one Worker job and its execution attempts. */
+/** Mutable control-plane state for one stable Job and its execution attempts. */
 public final class JobExecutionState {
 
     private final String jobId;
@@ -38,14 +38,8 @@ public final class JobExecutionState {
     public JobExecutionState(
             String jobId,
             JobSubmission submission) {
-
-        this.jobId = requireText(jobId, "jobId");
-        this.submission = Objects.requireNonNull(
-                submission,
-                "submission must not be null");
-        this.createTimeMillis = System.currentTimeMillis();
+        this(jobId, submission, System.currentTimeMillis());
         this.attempts.add(new JobExecutionAttempt(this.jobId, 1));
-
         transitions.add(
                 new JobStateTransition(
                         stateVersion,
@@ -53,6 +47,79 @@ public final class JobExecutionState {
                         ServerJobStatus.CREATED,
                         createTimeMillis,
                         "job-created"));
+    }
+
+    private JobExecutionState(
+            String jobId,
+            JobSubmission submission,
+            long createTimeMillis) {
+        this.jobId = requireText(jobId, "jobId");
+        this.submission = Objects.requireNonNull(
+                submission,
+                "submission must not be null");
+        this.createTimeMillis = createTimeMillis;
+    }
+
+    /** Rehydrates terminal history and opens the next attempt for an approved retry. */
+    public static JobExecutionState retryFrom(
+            String jobId,
+            JobSubmission submission,
+            long createTimeMillis,
+            long submittedTimeMillis,
+            long stateVersion,
+            long checkpointVersion,
+            ServerJobStatus previousStatus,
+            List<JobStateTransition> previousTransitions,
+            List<JobExecutionAttempt> previousAttempts) {
+
+        if (previousStatus != ServerJobStatus.FAILED) {
+            throw new IllegalStateException(
+                    "Retry state must originate from FAILED");
+        }
+        if (previousAttempts == null || previousAttempts.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Retry state requires previous attempts");
+        }
+
+        JobExecutionState state = new JobExecutionState(
+                jobId,
+                submission,
+                createTimeMillis);
+        state.submittedTimeMillis = submittedTimeMillis;
+        state.stateVersion = stateVersion;
+        state.checkpointVersion = checkpointVersion;
+        state.status = previousStatus;
+        state.transitions.addAll(previousTransitions);
+        state.attempts.addAll(previousAttempts);
+        state.beginRetry();
+        return state;
+    }
+
+    private synchronized void beginRetry() {
+        JobStateMachine.requireRetryTransition(
+                status,
+                ServerJobStatus.SUBMITTED);
+
+        JobExecutionAttempt last = currentAttempt();
+        if (!last.getStatus().isTerminal()) {
+            throw new IllegalStateException(
+                    "Previous attempt must be terminal before retry");
+        }
+
+        int nextAttemptNumber = last.getAttemptNumber() + 1;
+        attempts.add(new JobExecutionAttempt(jobId, nextAttemptNumber));
+        cancellationRequested = false;
+        queuedTimeMillis = 0L;
+        startTimeMillis = 0L;
+        endTimeMillis = 0L;
+        result = null;
+        failure = null;
+        runId = null;
+        jobLogFile = null;
+
+        retryTransition(
+                ServerJobStatus.SUBMITTED,
+                "retry-attempt-created");
     }
 
     public synchronized void markSubmitted() {
@@ -67,8 +134,7 @@ public final class JobExecutionState {
     }
 
     public synchronized boolean markRunning() {
-        if (status != ServerJobStatus.QUEUED
-                || cancellationRequested) {
+        if (status != ServerJobStatus.QUEUED || cancellationRequested) {
             return false;
         }
         currentAttempt().markRunning();
@@ -119,6 +185,24 @@ public final class JobExecutionState {
         return true;
     }
 
+    /** Records a retry scheduling/admission failure before framework execution started. */
+    public synchronized boolean failBeforeExecution(Throwable failure) {
+        if (status.isTerminal()) {
+            return false;
+        }
+        currentAttempt().completeBeforeExecution(failure);
+        this.result = null;
+        this.failure = failure;
+        this.endTimeMillis = System.currentTimeMillis();
+        transition(
+                ServerJobStatus.FAILED,
+                "execution-not-started:"
+                        + (failure == null
+                        ? "Unknown"
+                        : failure.getClass().getSimpleName()));
+        return true;
+    }
+
     private JobExecutionAttempt currentAttempt() {
         return attempts.get(attempts.size() - 1);
     }
@@ -128,6 +212,21 @@ public final class JobExecutionState {
             String reason) {
         ServerJobStatus previous = status;
         JobStateMachine.requireTransition(previous, target);
+        appendTransition(previous, target, reason);
+    }
+
+    private void retryTransition(
+            ServerJobStatus target,
+            String reason) {
+        ServerJobStatus previous = status;
+        JobStateMachine.requireRetryTransition(previous, target);
+        appendTransition(previous, target, reason);
+    }
+
+    private void appendTransition(
+            ServerJobStatus previous,
+            ServerJobStatus target,
+            String reason) {
         stateVersion++;
         checkpointVersion++;
         status = target;

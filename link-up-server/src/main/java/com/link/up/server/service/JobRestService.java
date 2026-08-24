@@ -46,13 +46,19 @@ public final class JobRestService {
 
     public JobRestService(JobApplication manager) {
         this(manager,
-                new WorkerIdentity("embedded-link-up-node", "Embedded Link-Up Offline Worker",
+                new WorkerIdentity(
+                        "embedded-link-up-node",
+                        "Embedded Link-Up Offline Worker",
                         WorkerIdentity.implementationVersion()),
-                1, 1);
+                1,
+                1);
     }
 
-    public JobRestService(JobApplication manager, WorkerIdentity workerIdentity,
-                          int maxConcurrentJobs, int maxQueuedJobs) {
+    public JobRestService(
+            JobApplication manager,
+            WorkerIdentity workerIdentity,
+            int maxConcurrentJobs,
+            int maxQueuedJobs) {
         this.manager = manager;
         this.hoconParser = new JobConfigParser();
         this.jobSpecCompiler = new JobSpecCompiler();
@@ -80,37 +86,60 @@ public final class JobRestService {
     }
 
     public JobResponse submit(JobSubmitRequest request) {
+        return response(manager.submit(toSubmission(request)));
+    }
+
+    /** Explicit manual retry. The request must describe the exact same job content. */
+    public JobResponse retry(
+            String jobId,
+            JobSubmitRequest request) {
+        return response(
+                manager.retry(
+                        requireText(jobId, "jobId"),
+                        toSubmission(request)));
+    }
+
+    private JobSubmission toSubmission(JobSubmitRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("Submit request must not be null");
         }
-        String externalExecutionId = requireText(request.getExternalExecutionId(), "externalExecutionId");
-        String idempotencyKey = requireText(request.getIdempotencyKey(), "idempotencyKey");
+        String externalExecutionId = requireText(
+                request.getExternalExecutionId(),
+                "externalExecutionId");
+        String idempotencyKey = requireText(
+                request.getIdempotencyKey(),
+                "idempotencyKey");
         Integer definitionVersion = request.getDefinitionVersion();
         if (definitionVersion == null || definitionVersion.intValue() <= 0) {
-            throw new IllegalArgumentException("definitionVersion must be greater than 0");
+            throw new IllegalArgumentException(
+                    "definitionVersion must be greater than 0");
         }
 
         boolean hasJobSpec = request.getJobSpec() != null;
         boolean hasHocon = hasText(request.getHocon());
         if (hasJobSpec == hasHocon) {
-            throw new IllegalArgumentException("Exactly one of jobSpec or hocon must be provided");
+            throw new IllegalArgumentException(
+                    "Exactly one of jobSpec or hocon must be provided");
         }
 
         JobDefinition definition;
         String configDigest;
         if (hasJobSpec) {
             definition = jobSpecCompiler.compile(request.getJobSpec());
-            configDigest = sha256("job-spec\n" + canonical(request.getJobSpec()));
+            configDigest = sha256(
+                    "job-spec\n" + canonical(request.getJobSpec()));
         } else {
             String hocon = requireText(request.getHocon(), "hocon");
             definition = parseHocon(hocon);
             configDigest = sha256("hocon\n" + hocon);
         }
 
-        JobSubmission submission = new JobSubmission(
-                externalExecutionId, idempotencyKey, definitionVersion.intValue(),
-                configDigest, definition);
-        return response(manager.submit(submission));
+        return new JobSubmission(
+                externalExecutionId,
+                idempotencyKey,
+                definitionVersion.intValue(),
+                configDigest,
+                definition);
     }
 
     public JobSnapshot job(String jobId) { return manager.getJob(jobId); }
@@ -128,16 +157,16 @@ public final class JobRestService {
         }
         return Collections.unmodifiableList(tasks);
     }
-    public JobSnapshot.Metrics metrics(String jobId) { return manager.getJob(jobId).getMetrics(); }
+    public JobSnapshot.Metrics metrics(String jobId) {
+        return manager.getJob(jobId).getMetrics();
+    }
 
     public JobLogPageResponse logs(
             String jobId,
             long cursor,
             int limit) {
-
         JobSnapshot snapshot = manager.getJob(jobId);
         JobExecutionMetadata metadata = manager.getMetadata(jobId);
-
         return jobLogReader.read(
                 jobId,
                 metadata,
@@ -146,15 +175,22 @@ public final class JobRestService {
                 limit);
     }
 
-    public PageResponse<JobSnapshot.Summary> jobs(String statusValue, int page, int pageSize) {
-        List<JobSnapshot.Summary> summaries = new ArrayList<JobSnapshot.Summary>();
+    public PageResponse<JobSnapshot.Summary> jobs(
+            String statusValue,
+            int page,
+            int pageSize) {
+        List<JobSnapshot.Summary> summaries =
+                new ArrayList<JobSnapshot.Summary>();
         for (JobSnapshot snapshot : filtered(statusValue)) {
             summaries.add(snapshot.toSummary());
         }
         return page(summaries, page, pageSize);
     }
 
-    public PageResponse<JobResponse> executionPage(String statusValue, int page, int pageSize) {
+    public PageResponse<JobResponse> executionPage(
+            String statusValue,
+            int page,
+            int pageSize) {
         List<JobResponse> responses = new ArrayList<JobResponse>();
         for (JobSnapshot snapshot : filtered(statusValue)) {
             responses.add(response(snapshot));
@@ -162,17 +198,27 @@ public final class JobRestService {
         return page(responses, page, pageSize);
     }
 
-    public JobSnapshot.Summary cancel(String jobId) { return manager.cancel(jobId).toSummary(); }
-    public JobResponse cancelResponse(String jobId) { return response(manager.cancel(jobId)); }
+    public JobSnapshot.Summary cancel(String jobId) {
+        return manager.cancel(jobId).toSummary();
+    }
+    public JobResponse cancelResponse(String jobId) {
+        return response(manager.cancel(jobId));
+    }
     public WorkerNodeResponse node() {
-        return new WorkerNodeResponse(workerIdentity, manager, maxConcurrentJobs, maxQueuedJobs);
+        return new WorkerNodeResponse(
+                workerIdentity,
+                manager,
+                maxConcurrentJobs,
+                maxQueuedJobs);
     }
 
     private JobDefinition parseHocon(String hocon) {
         try {
             return hoconParser.parse(hocon);
         } catch (ConfigException exception) {
-            throw new IllegalArgumentException("Invalid HOCON job configuration", exception);
+            throw new IllegalArgumentException(
+                    "Invalid HOCON job configuration",
+                    exception);
         }
     }
 
@@ -180,7 +226,9 @@ public final class JobRestService {
         try {
             return protocolMapper.writeValueAsString(spec);
         } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("Invalid structured jobSpec", exception);
+            throw new IllegalArgumentException(
+                    "Invalid structured jobSpec",
+                    exception);
         }
     }
 
@@ -195,32 +243,55 @@ public final class JobRestService {
         return result;
     }
 
-    private <T> PageResponse<T> page(List<T> values, int page, int pageSize) {
+    private <T> PageResponse<T> page(
+            List<T> values,
+            int page,
+            int pageSize) {
         validatePage(page, pageSize);
         long startLong = (long) (page - 1) * pageSize;
-        int from = startLong >= values.size() ? values.size() : (int) startLong;
+        int from = startLong >= values.size()
+                ? values.size()
+                : (int) startLong;
         int to = Math.min(values.size(), from + pageSize);
-        return new PageResponse<T>(values.subList(from, to), page, pageSize, values.size());
+        return new PageResponse<T>(
+                values.subList(from, to),
+                page,
+                pageSize,
+                values.size());
     }
 
     private void validatePage(int page, int pageSize) {
-        if (page < 1) throw new IllegalArgumentException("page must be greater than 0");
+        if (page < 1) {
+            throw new IllegalArgumentException(
+                    "page must be greater than 0");
+        }
         if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
-            throw new IllegalArgumentException("pageSize must be between 1 and " + MAX_PAGE_SIZE);
+            throw new IllegalArgumentException(
+                    "pageSize must be between 1 and " + MAX_PAGE_SIZE);
         }
     }
 
     private JobResponse response(JobSnapshot snapshot) {
-        JobExecutionMetadata metadata = manager.getMetadata(snapshot.getJobId());
-        return new JobResponse(snapshot, metadata, workerIdentity);
+        JobExecutionMetadata metadata =
+                manager.getMetadata(snapshot.getJobId());
+        return new JobResponse(
+                snapshot,
+                metadata,
+                workerIdentity,
+                manager.retryDecision(snapshot.getJobId()));
     }
 
     private ServerJobStatus parseStatus(String statusValue) {
-        if (!hasText(statusValue)) return null;
+        if (!hasText(statusValue)) {
+            return null;
+        }
         try {
-            return ServerJobStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
+            return ServerJobStatus.valueOf(
+                    statusValue.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("Unknown job status: " + statusValue, exception);
+            throw new IllegalArgumentException(
+                    "Unknown job status: " + statusValue,
+                    exception);
         }
     }
 
@@ -229,7 +300,9 @@ public final class JobRestService {
     }
 
     private static String requireText(String value, String name) {
-        if (!hasText(value)) throw new IllegalArgumentException(name + " must not be blank");
+        if (!hasText(value)) {
+            throw new IllegalArgumentException(name + " must not be blank");
+        }
         return value.trim();
     }
 
@@ -243,7 +316,9 @@ public final class JobRestService {
             }
             return result.toString();
         } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
+            throw new IllegalStateException(
+                    "SHA-256 is not available",
+                    exception);
         }
     }
 }
