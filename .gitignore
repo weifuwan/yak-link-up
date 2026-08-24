@@ -19,6 +19,9 @@ target/
 /logs
 logs.zip
 
+# Link-Up local Worker state
+/data/worker-state/
+
 # Intellij Idea files
 .idea/
 *.iml
