@@ -24,9 +24,23 @@ public interface JobApplication extends AutoCloseable {
 
     JobSnapshot cancel(String jobId);
 
-    JobRetryDecision retryDecision(String jobId);
+    /**
+     * Additive retry capability. Legacy/embedded implementations remain
+     * source-compatible and conservatively report that evidence is unavailable.
+     */
+    default JobRetryDecision retryDecision(String jobId) {
+        return JobRetryDecision.deny(
+                JobRetryDecision.EVIDENCE_UNAVAILABLE,
+                "This JobApplication implementation does not expose retry safety evidence.",
+                1);
+    }
 
-    JobSnapshot retry(String jobId, JobSubmission submission);
+    default JobSnapshot retry(
+            String jobId,
+            JobSubmission submission) {
+        throw new JobRetryNotAllowedException(
+                retryDecision(jobId));
+    }
 
     int getRunningJobCount();
 
