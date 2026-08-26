@@ -10,6 +10,7 @@ import com.link.up.server.http.servlet.JobsServlet;
 import com.link.up.server.http.servlet.NodeServlet;
 import com.link.up.server.http.servlet.NotFoundServlet;
 import com.link.up.server.service.ConnectorRestService;
+import com.link.up.server.service.JobEventRestService;
 import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.eclipse.jetty.server.Server;
@@ -40,6 +41,7 @@ public final class JettyServer implements AutoCloseable {
                 new ConnectorRestService(
                         new ConnectorSchemaCatalog(
                                 Collections.emptyList())),
+                null,
                 null);
     }
 
@@ -51,6 +53,7 @@ public final class JettyServer implements AutoCloseable {
                 config,
                 jobService,
                 connectorService,
+                null,
                 null);
     }
 
@@ -59,6 +62,20 @@ public final class JettyServer implements AutoCloseable {
             JobRestService jobService,
             ConnectorRestService connectorService,
             JobPlanningService planningService) {
+        this(
+                config,
+                jobService,
+                connectorService,
+                planningService,
+                null);
+    }
+
+    public JettyServer(
+            FluxServerConfig config,
+            JobRestService jobService,
+            ConnectorRestService connectorService,
+            JobPlanningService planningService,
+            JobEventRestService eventService) {
 
         int minimumThreads = Math.min(
                 4,
@@ -130,6 +147,7 @@ public final class JettyServer implements AutoCloseable {
                 new ServletHolder(
                         new JobResourceServlet(
                                 jobService,
+                                eventService,
                                 config.getMaxRequestBytes())),
                 RestConstants.JOBS + "/*");
         context.addServlet(

@@ -142,6 +142,42 @@ HTTP
 
 Domain 不持有 `Thread`、`Future`、`Semaphore`、`ExecutorService` 或 framework `JobExecution`。
 
+## Runtime Event Journal
+
+Runtime Event 不替代现有状态模型，而是观察成功持久化的 checkpoint：
+
+```text
+JobRuntimeLifecycle
+  -> JobRepository.save(snapshot, metadata)
+  -> EventPublishingJobRepository
+       1. durable checkpoint
+       2. derive one lifecycle fact
+       3. JobEventBus.publish
+  -> JsonLineJobEventStore
+       <stateDirectory>/job-events/<jobId>.jsonl
+```
+
+边界约束：
+
+- `JobSnapshot` / `JobExecutionMetadata` 仍是控制面状态真相。
+- Event Journal 只追加，不反向修改 Job 状态，不参与 Retry/Commit 决策。
+- 只有 checkpoint 成功后才派生事件。
+- `JobEventBus` 保持同一 Job 的同步顺序，并隔离 Listener 失败。
+- 每条事件使用 `checkpointVersion` 作为单 Job 序号，Retry 后继续递增。
+- Event JSON 不包含 JobSpec、Connector options、SQL、Secret、异常正文、Prepared Connector 或私有 metadata。
+- 当前只记录 Job/Attempt 生命周期；Pipeline/Task 细粒度事件留给后续阶段。
+
+查询链路：
+
+```text
+GET /api/v1/jobs/{jobId}/events?afterSequence=N&limit=M
+  -> JobEventRestService
+  -> JobEventReader
+  -> sequence-based page
+```
+
+`afterSequence` 是排他游标。读取损坏或不支持版本的事件文件会返回稳定的 Event History 错误，但不会改变已运行任务的结果。
+
 ## Retry
 
 Retry 是新的 Attempt，不是把旧 Attempt 改活：

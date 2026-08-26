@@ -11,6 +11,7 @@ Link-Up 是一个轻量、可嵌入的离线数据同步引擎。它把数据同
 - Job / Attempt 模型：同一个 Job 可以保留多次执行尝试。
 - 安全手动重试：只有明确证明“没有已提交或未知数据”的 FAILED Attempt 才允许重试。
 - 提交前校验和 Explain：查看规范化逻辑计划、实际 Source Split/Task 拓扑与稳定指纹。
+- 追加式 Runtime Event Journal：按 Job/Attempt 回看提交、排队、运行、取消与终态时间线。
 
 ## 核心模型
 
@@ -37,6 +38,8 @@ HTTP
         -> Attempt #1 / #2 / ...
      -> JobRuntimeScheduler
      -> JobRepository
+        -> JobSnapshot / JobExecutionMetadata
+        -> Runtime Event Journal (observer)
 ```
 
 一次安全重试不会创建新 Job：
@@ -57,7 +60,8 @@ POST /api/v1/jobs/validate
 POST /api/v1/jobs/explain
 ```
 
-两个接口都接收与结构化提交一致的 JSON 外壳，只要求 `jobSpec` 或 `hocon` 二选一；规划时不要求 `externalExecutionId`、`idempotencyKey` 和 `definitionVersion`。
+两个接口都接收与结构化提交一致的 JSON 外壳，只要求 `jobSpec` 或 `hocon` 二选一；
+规划时不要求 `externalExecutionId`、`idempotencyKey` 和 `definitionVersion`。
 
 边界约束：
 
@@ -87,6 +91,41 @@ POST /api/v1/jobs/explain
 }
 ```
 
+## Runtime Event Journal
+
+每次持久化生命周期 checkpoint 后，Worker 会把对应事实追加到：
+
+```text
+<stateDirectory>/job-events/<jobId>.jsonl
+```
+
+当前事件包括：
+
+```text
+JOB_SUBMITTED
+JOB_RETRY_CREATED
+JOB_QUEUED
+JOB_STARTED
+JOB_LOG_CREATED
+JOB_CANCEL_REQUESTED
+JOB_SUCCEEDED
+JOB_FAILED
+JOB_CANCELED
+JOB_LOST
+```
+
+事件使用 `checkpointVersion` 作为单 Job 单调递增序号。查询接口采用排他游标：
+
+```text
+GET /api/v1/jobs/{jobId}/events?afterSequence=0&limit=200
+```
+
+当前阶段仍以 `JobSnapshot` 和 `JobExecutionMetadata` 为控制面状态真相。
+Event Journal 只负责可观察历史，不反向驱动状态机；事件监听器或文件写入失败会被隔离，
+不改变任务执行、Commit 或 Retry 语义。
+
+安全边界：事件不保存 JobSpec、Connector options、SQL、Secret、异常正文或 Connector 私有 metadata，只保存稳定生命周期字段、Attempt 身份、状态、原因代码和故障类型。
+
 ## 模块
 
 | 模块 | 职责 |
@@ -94,7 +133,7 @@ POST /api/v1/jobs/explain
 | `link-up-api` | Connector 扩展契约和公共模型 |
 | `link-up-framework` | Planning、JobGraph、ExecutionGraph、本地执行运行时 |
 | `link-up-connectors` | JDBC / HTTP / Doris 等实现 |
-| `link-up-server` | Worker 控制面、REST、持久化、Attempt/Retry |
+| `link-up-server` | Worker 控制面、REST、持久化、Attempt/Retry、Runtime Event Journal |
 | `link-up-launcher` | 本地命令行组合入口 |
 | `link-up-dist` | 分发包 |
 | `link-up-bom` | 依赖版本管理 |
@@ -132,6 +171,7 @@ POST   /api/v1/jobs/validate
 POST   /api/v1/jobs/explain
 POST   /api/v1/jobs
 GET    /api/v1/jobs/{jobId}
+GET    /api/v1/jobs/{jobId}/events
 GET    /api/v1/jobs/{jobId}/logs
 GET    /api/v1/jobs/{jobId}/metrics
 DELETE /api/v1/jobs/{jobId}
@@ -140,7 +180,7 @@ GET    /api/v1/connectors
 GET    /api/v1/node
 ```
 
-Retry 请求必须重新携带与原 Job 完全一致的结构化提交内容。Worker 不会为了 Retry 把数据库密码、Token 或完整 JobSpec 写进 checkpoint。
+Retry 请求必须重新携带与原 Job 完全一致的结构化提交内容。Worker 不会为了 Retry 把数据库密码、Token 或完整 JobSpec 写进 checkpoint 或 Runtime Event Journal。
 
 ## 文档
 
