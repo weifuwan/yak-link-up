@@ -72,8 +72,16 @@ public enum PlanningErrorCode implements FluxErrorCode {
             false,
             FluxRetryScope.NONE),
 
-    INTERNAL_FAILURE(
+    SINK_PREPARATION_FAILED(
             "PLAN-009",
+            "Sink preparation failed",
+            FluxErrorCategory.PREPARATION,
+            FluxErrorPhase.SINK_PREPARATION,
+            false,
+            FluxRetryScope.NONE),
+
+    INTERNAL_FAILURE(
+            "PLAN-010",
             "Unexpected planning failure",
             FluxErrorCategory.INTERNAL,
             FluxErrorPhase.PHYSICAL_PLANNING,

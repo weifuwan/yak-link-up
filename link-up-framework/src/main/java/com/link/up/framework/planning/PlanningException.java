@@ -160,6 +160,19 @@ public final class PlanningException
                 cause);
     }
 
+    public static PlanningException sinkPreparationFailed(
+            String connectorId,
+            Throwable cause) {
+
+        return new PlanningException(
+                PlanningErrorCode.SINK_PREPARATION_FAILED,
+                "Sink preparation failed",
+                parameters(
+                        "connectorId",
+                        connectorId),
+                cause);
+    }
+
     public PlanningErrorCode getPlanningErrorCode() {
         return errorCode;
     }

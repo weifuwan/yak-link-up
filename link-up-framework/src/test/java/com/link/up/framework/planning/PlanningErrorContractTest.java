@@ -70,6 +70,29 @@ public class PlanningErrorContractTest {
     }
 
     @Test
+    public void sinkPreparationFailureShouldBeConservativelyNonRetryable() {
+        PlanningException failure =
+                PlanningException.sinkPreparationFailed(
+                        "doris",
+                        new IllegalStateException(
+                                "password=TEST_ONLY_SECRET"));
+
+        assertEquals(
+                PlanningErrorCode.SINK_PREPARATION_FAILED,
+                failure.getPlanningErrorCode());
+        assertEquals(
+                FluxErrorPhase.SINK_PREPARATION,
+                failure.getErrorPhase());
+        assertFalse(failure.isRetryable());
+        assertEquals(
+                FluxRetryScope.NONE,
+                failure.getRetryScope());
+        assertFalse(
+                failure.getMessage().contains(
+                        "TEST_ONLY_SECRET"));
+    }
+
+    @Test
     public void legacyApiErrorsShouldExposeStructuredDefaults() {
         assertEquals(
                 FluxErrorCategory.VALIDATION,

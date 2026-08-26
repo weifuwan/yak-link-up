@@ -1,6 +1,7 @@
 package com.link.up.framework.planning;
 
 import com.link.up.api.connector.schema.ConnectorRole;
+import com.link.up.api.exception.FluxRuntimeException;
 import com.link.up.framework.connector.ConnectorPreparer;
 import com.link.up.framework.connector.PreparedJob;
 import com.link.up.framework.connector.PreparedSource;
@@ -84,7 +85,7 @@ public final class JobPlanExplainer {
             preparedJob = connectorPreparer.prepareForExplain(
                     job,
                     preparedSource);
-        } catch (PlanningException failure) {
+        } catch (FluxRuntimeException failure) {
             throw failure;
         } catch (RuntimeException failure) {
             throw PlanningException.physicalPlanningFailed(
@@ -94,8 +95,11 @@ public final class JobPlanExplainer {
         JobGraph jobGraph;
         try {
             jobGraph = jobPlanner.plan(preparedJob);
-        } catch (PlanningException failure) {
+        } catch (FluxRuntimeException failure) {
             throw failure;
+        } catch (RuntimeException failure) {
+            throw PlanningException.physicalPlanningFailed(
+                    failure);
         } catch (Exception failure) {
             throw PlanningException.splitDiscoveryFailed(
                     job.getSource().getType(),
@@ -131,7 +135,7 @@ public final class JobPlanExplainer {
 
         try {
             return connectorPreparer.prepareSource(job);
-        } catch (PlanningException failure) {
+        } catch (FluxRuntimeException failure) {
             throw failure;
         } catch (Exception failure) {
             throw PlanningException.sourcePreparationFailed(

@@ -1,5 +1,6 @@
 package com.link.up.framework.execution;
 
+import com.link.up.api.exception.FluxRuntimeException;
 import com.link.up.framework.connector.ConnectorPreparer;
 import com.link.up.framework.connector.FactoryRegistry;
 import com.link.up.framework.connector.PreparedJob;
@@ -10,6 +11,7 @@ import com.link.up.framework.planner.JobGraph;
 import com.link.up.framework.planner.JobPlanner;
 import com.link.up.framework.planning.CapabilityNegotiation;
 import com.link.up.framework.planning.CapabilityNegotiator;
+import com.link.up.framework.planning.PlanningException;
 import org.apache.logging.log4j.CloseableThreadContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -174,20 +176,19 @@ public final class LocalFluxEngine
             capabilityNegotiator.requireSatisfied(initial);
 
             PreparedSource<?> preparedSource =
-                    connectorPreparer.prepareSource(
-                            definition);
+                    prepareSource(definition);
             CapabilityNegotiation prepared =
                     capabilityNegotiator.negotiate(
                             definition,
                             preparedSource);
             capabilityNegotiator.requireSatisfied(prepared);
 
-            PreparedJob preparedJob =
-                    connectorPreparer.prepare(
-                            definition,
-                            preparedSource);
-            JobGraph jobGraph =
-                    jobPlanner.plan(preparedJob);
+            PreparedJob preparedJob = prepareSink(
+                    definition,
+                    preparedSource);
+            JobGraph jobGraph = plan(
+                    definition,
+                    preparedJob);
 
             CapabilityNegotiation physical =
                     capabilityNegotiator.negotiate(
@@ -212,6 +213,59 @@ public final class LocalFluxEngine
                     runId,
                     failure);
             throw failure;
+        }
+    }
+
+    private PreparedSource<?> prepareSource(
+            JobDefinition definition)
+            throws Exception {
+
+        try {
+            return connectorPreparer.prepareSource(
+                    definition);
+        } catch (FluxRuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw PlanningException.sourcePreparationFailed(
+                    definition.getSource().getType(),
+                    failure);
+        }
+    }
+
+    private PreparedJob prepareSink(
+            JobDefinition definition,
+            PreparedSource<?> preparedSource)
+            throws Exception {
+
+        try {
+            return connectorPreparer.prepare(
+                    definition,
+                    preparedSource);
+        } catch (FluxRuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw PlanningException.sinkPreparationFailed(
+                    definition.getSink().getType(),
+                    failure);
+        }
+    }
+
+    private JobGraph plan(
+            JobDefinition definition,
+            PreparedJob preparedJob)
+            throws Exception {
+
+        try {
+            return jobPlanner.plan(preparedJob);
+        } catch (FluxRuntimeException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw PlanningException.physicalPlanningFailed(
+                    failure);
+        } catch (Exception failure) {
+            throw PlanningException.splitDiscoveryFailed(
+                    definition.getSource().getType(),
+                    failure);
         }
     }
 

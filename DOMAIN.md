@@ -30,7 +30,7 @@ Capability 是稳定执行语义，不是前端控件：
 supported       Connector 声明可提供
 required        Job 显式必须具备
 preferred       Job 希望具备，缺失可降级
- derivedRequired 根据真实拓扑推导的必须能力
+derivedRequired 根据真实拓扑推导的必须能力
 observed        规划过程实际观察到的能力事实
 ```
 
@@ -120,7 +120,8 @@ parameters
 | `PLAN-006` | Source Preparation / Schema Discovery 失败 |
 | `PLAN-007` | Split Discovery 失败 |
 | `PLAN-008` | Physical Planning 失败 |
-| `PLAN-009` | 未预期的内部规划失败 |
+| `PLAN-009` | Sink Preparation 失败 |
+| `PLAN-010` | 未预期的内部规划失败 |
 
 错误参数只放安全身份和枚举。Secret、Connector options、SQL、完整 URL 和原始异常正文不得进入结构化参数。
 
