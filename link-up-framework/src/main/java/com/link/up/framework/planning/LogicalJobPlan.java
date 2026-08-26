@@ -1,16 +1,19 @@
 package com.link.up.framework.planning;
 
+import com.link.up.api.connector.schema.ConnectorCapability;
 import com.link.up.framework.job.ColumnMapping;
 import com.link.up.framework.job.ExecutionConfig;
+import com.link.up.framework.job.JobCapabilityRequirements;
 import com.link.up.framework.job.JobDefinition;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Immutable, secret-safe representation of the submitted job intent.
+ * Immutable, Secret-safe representation of the submitted Job intent.
  *
  * <p>Connector option values deliberately remain outside this model. Their
  * complete canonical form contributes to the fingerprint, so configuration
@@ -23,6 +26,7 @@ public final class LogicalJobPlan {
     private final String sinkConnectorId;
     private final RuntimeSettings runtime;
     private final List<Column> columns;
+    private final CapabilityIntent capabilities;
     private final String fingerprint;
 
     private LogicalJobPlan(
@@ -31,6 +35,7 @@ public final class LogicalJobPlan {
             String sinkConnectorId,
             RuntimeSettings runtime,
             List<Column> columns,
+            CapabilityIntent capabilities,
             String fingerprint) {
 
         this.jobName = requireText(jobName, "jobName");
@@ -48,20 +53,28 @@ public final class LogicalJobPlan {
                         Objects.requireNonNull(
                                 columns,
                                 "columns must not be null")));
+        this.capabilities = Objects.requireNonNull(
+                capabilities,
+                "capabilities must not be null");
         this.fingerprint = requireText(
                 fingerprint,
                 "fingerprint");
     }
 
-    public static LogicalJobPlan from(JobDefinition definition) {
+    public static LogicalJobPlan from(
+            JobDefinition definition) {
+
         JobDefinition job = Objects.requireNonNull(
                 definition,
                 "definition must not be null");
+        List<Column> columns =
+                new ArrayList<Column>();
+        ColumnMapping mapping =
+                job.getColumnMapping();
 
-        List<Column> columns = new ArrayList<Column>();
-        ColumnMapping mapping = job.getColumnMapping();
         if (mapping != null) {
-            for (ColumnMapping.Item item : mapping.getColumns()) {
+            for (ColumnMapping.Item item :
+                    mapping.getColumns()) {
                 columns.add(
                         new Column(
                                 item.getSource(),
@@ -73,8 +86,11 @@ public final class LogicalJobPlan {
                 job.getName(),
                 job.getSource().getType(),
                 job.getSink().getType(),
-                RuntimeSettings.from(job.getExecutionConfig()),
+                RuntimeSettings.from(
+                        job.getExecutionConfig()),
                 columns,
+                CapabilityIntent.from(
+                        job.getCapabilityRequirements()),
                 PlanFingerprint.create(job));
     }
 
@@ -96,6 +112,10 @@ public final class LogicalJobPlan {
 
     public List<Column> getColumns() {
         return columns;
+    }
+
+    public CapabilityIntent getCapabilities() {
+        return capabilities;
     }
 
     public String getFingerprint() {
@@ -213,6 +233,72 @@ public final class LogicalJobPlan {
 
         public String getSplitAssignmentMode() {
             return splitAssignmentMode;
+        }
+    }
+
+    public static final class CapabilityIntent {
+
+        private final Endpoint source;
+        private final Endpoint sink;
+
+        private CapabilityIntent(
+                Endpoint source,
+                Endpoint sink) {
+            this.source = source;
+            this.sink = sink;
+        }
+
+        private static CapabilityIntent from(
+                JobCapabilityRequirements requirements) {
+
+            JobCapabilityRequirements safe =
+                    requirements == null
+                            ? JobCapabilityRequirements.empty()
+                            : requirements;
+
+            return new CapabilityIntent(
+                    new Endpoint(
+                            safe.getSourceRequired(),
+                            safe.getSourcePreferred()),
+                    new Endpoint(
+                            safe.getSinkRequired(),
+                            safe.getSinkPreferred()));
+        }
+
+        public Endpoint getSource() {
+            return source;
+        }
+
+        public Endpoint getSink() {
+            return sink;
+        }
+    }
+
+    public static final class Endpoint {
+
+        private final List<ConnectorCapability> required;
+        private final List<ConnectorCapability> preferred;
+
+        private Endpoint(
+                Collection<ConnectorCapability> required,
+                Collection<ConnectorCapability> preferred) {
+
+            this.required = immutable(required);
+            this.preferred = immutable(preferred);
+        }
+
+        public List<ConnectorCapability> getRequired() {
+            return required;
+        }
+
+        public List<ConnectorCapability> getPreferred() {
+            return preferred;
+        }
+
+        private static List<ConnectorCapability> immutable(
+                Collection<ConnectorCapability> values) {
+            return Collections.unmodifiableList(
+                    new ArrayList<ConnectorCapability>(values));
         }
     }
 

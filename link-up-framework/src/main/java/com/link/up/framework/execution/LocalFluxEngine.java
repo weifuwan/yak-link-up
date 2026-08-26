@@ -3,10 +3,13 @@ package com.link.up.framework.execution;
 import com.link.up.framework.connector.ConnectorPreparer;
 import com.link.up.framework.connector.FactoryRegistry;
 import com.link.up.framework.connector.PreparedJob;
+import com.link.up.framework.connector.PreparedSource;
 import com.link.up.framework.job.JobDefinition;
 import com.link.up.framework.job.JobResult;
 import com.link.up.framework.planner.JobGraph;
 import com.link.up.framework.planner.JobPlanner;
+import com.link.up.framework.planning.CapabilityNegotiation;
+import com.link.up.framework.planning.CapabilityNegotiator;
 import org.apache.logging.log4j.CloseableThreadContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -24,6 +27,7 @@ public final class LocalFluxEngine
     private final ClassLoader classLoader;
     private final ConnectorPreparer connectorPreparer;
     private final JobPlanner jobPlanner;
+    private final CapabilityNegotiator capabilityNegotiator;
     private final FactoryRegistry registry;
 
     public LocalFluxEngine(
@@ -53,6 +57,9 @@ public final class LocalFluxEngine
         this.jobPlanner = Objects.requireNonNull(
                 jobPlanner,
                 "jobPlanner must not be null");
+        this.capabilityNegotiator =
+                new CapabilityNegotiator(
+                        this.connectorPreparer);
         this.registry = registry;
     }
 
@@ -91,7 +98,7 @@ public final class LocalFluxEngine
     }
 
     /**
-     * Executes one prepared job and exposes the active execution to an optional
+     * Executes one prepared Job and exposes the active execution to an optional
      * listener used by the local Worker control plane.
      */
     public JobResult execute(
@@ -105,14 +112,12 @@ public final class LocalFluxEngine
 
         long logIdentityTimeMillis =
                 System.currentTimeMillis();
-        String runId =
-                JobLogFileName.createJobId(
-                        job.getName(),
-                        logIdentityTimeMillis);
-        String jobLogFile =
-                JobLogFileName.create(
-                        job.getName(),
-                        logIdentityTimeMillis);
+        String runId = JobLogFileName.createJobId(
+                job.getName(),
+                logIdentityTimeMillis);
+        String jobLogFile = JobLogFileName.create(
+                job.getName(),
+                logIdentityTimeMillis);
 
         try (CloseableThreadContext.Instance ignored =
                      openLogContext(
@@ -125,18 +130,16 @@ public final class LocalFluxEngine
                     runId,
                     jobLogFile);
 
-            JobGraph jobGraph =
-                    prepareAndPlan(
-                            job,
-                            runId);
+            JobGraph jobGraph = prepareAndPlan(
+                    job,
+                    runId);
 
-            JobExecution execution =
-                    new JobExecution(
-                            jobGraph,
-                            classLoader,
-                            System.currentTimeMillis(),
-                            runId,
-                            jobLogFile);
+            JobExecution execution = new JobExecution(
+                    jobGraph,
+                    classLoader,
+                    System.currentTimeMillis(),
+                    runId,
+                    jobLogFile);
 
             notifyJobExecutionCreated(
                     listener,
@@ -165,11 +168,34 @@ public final class LocalFluxEngine
                 runId);
 
         try {
+            CapabilityNegotiation initial =
+                    capabilityNegotiator.negotiate(
+                            definition);
+            capabilityNegotiator.requireSatisfied(initial);
+
+            PreparedSource<?> preparedSource =
+                    connectorPreparer.prepareSource(
+                            definition);
+            CapabilityNegotiation prepared =
+                    capabilityNegotiator.negotiate(
+                            definition,
+                            preparedSource);
+            capabilityNegotiator.requireSatisfied(prepared);
+
             PreparedJob preparedJob =
                     connectorPreparer.prepare(
-                            definition);
+                            definition,
+                            preparedSource);
+            JobGraph jobGraph =
+                    jobPlanner.plan(preparedJob);
 
-            return jobPlanner.plan(preparedJob);
+            CapabilityNegotiation physical =
+                    capabilityNegotiator.negotiate(
+                            definition,
+                            jobGraph);
+            capabilityNegotiator.requireSatisfied(physical);
+
+            return jobGraph;
 
         } catch (Exception failure) {
             LOG.error(
@@ -207,7 +233,7 @@ public final class LocalFluxEngine
 
         return classLoader == null
                 ? Thread.currentThread()
-                .getContextClassLoader()
+                        .getContextClassLoader()
                 : classLoader;
     }
 

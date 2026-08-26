@@ -31,6 +31,7 @@ Link-Up 是本地优先的离线数据同步引擎。架构只解决现在需要
 JobSpec
   -> JobDefinition
   -> LogicalJobPlan
+  -> CapabilityNegotiator
   -> ConnectorPreparer
   -> PreparedJob
   -> JobPlanner
@@ -58,13 +59,54 @@ JobPlanner
 
 Planner 不创建 Reader、线程、Channel、Split Queue 或 CancellationToken。
 
+## Capability Negotiation
+
+Capability 描述 Connector 可以提供的稳定执行能力。Job 可以声明：
+
+```text
+required  -> 缺失即拒绝
+preferred -> 缺失时允许降级，并返回 Warning
+```
+
+协商不是只读页面能力，而是 Validate、Explain 和正式 Runtime 共用的执行前置条件：
+
+```text
+JobDefinition
+  -> negotiate explicit requirements       # 无 Connector IO
+  -> validate option rules
+  -> prepare Source + discover schemas
+  -> negotiate derived topology requirements
+  -> prepare Sink                          # 这里才允许 DDL/cleanup
+  -> enumerate splits + JobGraph
+  -> negotiate observed physical facts
+  -> execute
+```
+
+多表边界必须特别明确：Source Schema 发现出多个数据集时，`MULTI_TABLE` 会同时成为 Source 和 Sink 的派生 Required Capability。协商发生在 `SinkPreparer` 之前，因此不兼容任务不会先建表、清表再失败。
+
+协商输出：
+
+```text
+CapabilityNegotiation
+  ├── status: SATISFIED / DEGRADED / REJECTED
+  ├── source
+  │    ├── supported / required / preferred
+  │    ├── derivedRequired / observed
+  │    └── missingRequired / missingPreferred / undeclaredObserved
+  └── sink
+       └── same shape
+```
+
+第三方 Connector 的 `Factory#capabilities()` 默认仍为空集合，保持二进制和源码兼容；但当 Job 显式要求能力或实际拓扑需要能力时，空声明不能绕过协商。
+
 ## Plan / Explain
 
 Plan / Explain 不创建第二套执行图：
 
 ```text
 JobDefinition
-  -> LogicalJobPlan              # 用户意图、默认值、Fingerprint
+  -> LogicalJobPlan              # 用户意图、默认值、Capability、Fingerprint
+  -> CapabilityNegotiator
   -> ConnectorPreparer
        validate                  # 无 Connector IO
        prepareForExplain         # Source discovery + Sink planning stub
@@ -82,6 +124,7 @@ JobDefinition
 - 解析默认值；
 - 发现 Source/Sink Factory；
 - 执行 Connector OptionRule 校验；
+- 协商显式 Required/Preferred Capability；
 - 生成 LogicalJobPlan 和稳定 Fingerprint。
 
 `validate` 不可以：
@@ -97,10 +140,11 @@ JobDefinition
 
 - 创建 Source；
 - 发现 Source Schema；
+- 派生拓扑 Required Capability；
 - 枚举并校验 Source Split；
 - 应用字段映射；
 - 使用正式 JobPlanner 生成 JobGraph；
-- 投影 Pipeline/Task 数量、并行度和数据集信息。
+- 投影 Pipeline/Task 数量、并行度、数据集和 CapabilityNegotiation。
 
 `explain` 不可以：
 
@@ -111,7 +155,43 @@ JobDefinition
 - 写入数据；
 - 序列化 Connector options、ReadonlyConfig、Prepared Connector、ClassLoader 或私有 metadata。
 
-完整 Connector 配置只进入 SHA-256 Fingerprint 的内存计算。Fingerprint 能识别包括 Secret 在内的配置变化，但计划和诊断不输出原始值。
+完整 Connector 配置和 Capability Intent 只进入 SHA-256 Fingerprint 的内存计算。Fingerprint 能识别包括 Secret 在内的配置变化，但计划和诊断不输出原始值。
+
+## Structured Error
+
+`FluxErrorCode` 是稳定错误目录，新增元数据：
+
+```text
+code
+category
+phase
+retryable
+retryScope
+```
+
+规划边界使用 `PlanningException`，错误参数只允许 role、connectorId、capability、format、reason 等安全值。REST 返回元数据和参数，不直接输出 cause message。
+
+执行失败时，`JobExecutionAttempt` 会从异常 cause chain 中提取 `FluxRuntimeException`，持久化：
+
+```text
+errorCode
+errorCategory
+errorPhase
+failureRetryable
+failureRetryScope
+```
+
+Checkpoint formatVersion 升级为 3，同时继续读取 v1/v2。RetryPolicy 的判断顺序：
+
+```text
+terminal outcome
+  -> structured error retryable?
+  -> commit evidence available?
+  -> unknown / partial / committed data?
+  -> allow or deny
+```
+
+错误可重试不等于数据可重放。即便 `retryable=true`，只要 Commit Evidence 不安全，仍然拒绝 Retry；反过来，明确的不可重试错误即使没有提交数据，也不会盲目重跑。
 
 ## Control Plane
 
@@ -135,6 +215,7 @@ HTTP / registration
 HTTP
   -> JobPlanningService
   -> JobPlanExplainer
+  -> CapabilityNegotiator
   -> ConnectorPreparer / JobPlanner
 ```
 
@@ -165,7 +246,7 @@ JobRuntimeLifecycle
 - `JobEventBus` 保持同一 Job 的同步顺序，并隔离 Listener 失败。
 - 每条事件使用 `checkpointVersion` 作为单 Job 序号，Retry 后继续递增。
 - Event JSON 不包含 JobSpec、Connector options、SQL、Secret、异常正文、Prepared Connector 或私有 metadata。
-- 当前只记录 Job/Attempt 生命周期；Pipeline/Task 细粒度事件留给后续阶段。
+- 当前只记录 Job/Attempt 生命周期；结构化错误元数据保存在 Attempt read model，Pipeline/Task 细粒度事件留给后续阶段。
 
 查询链路：
 
@@ -185,6 +266,7 @@ Retry 是新的 Attempt，不是把旧 Attempt 改活：
 ```text
 FAILED Attempt #1
   -> RetryPolicy
+  -> structured error permits retry
   -> commit evidence == SAFE
   -> Attempt #2
 ```
@@ -192,6 +274,7 @@ FAILED Attempt #1
 允许 Retry 的最低条件：
 
 - Job 当前为 `FAILED`；
+- 结构化错误没有明确声明不可重试；
 - 上一次 Attempt 有 commit evidence；
 - `dataCommittedTaskCount == 0`；
 - `successfullyCommittedRecordCount == 0`；

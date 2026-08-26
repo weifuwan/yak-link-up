@@ -9,7 +9,7 @@ import java.util.Objects;
 public final class JobPlanResult {
 
     public static final String CURRENT_API_VERSION =
-            "link-up-plan/v1";
+            "link-up-plan/v2";
 
     public enum Mode {
         VALIDATE,
@@ -21,6 +21,7 @@ public final class JobPlanResult {
     private final boolean valid;
     private final LogicalJobPlan logicalPlan;
     private final PhysicalJobPlan physicalPlan;
+    private final CapabilityNegotiation capabilityNegotiation;
     private final List<PlanningDiagnostic> diagnostics;
     private final String text;
 
@@ -28,17 +29,20 @@ public final class JobPlanResult {
             Mode mode,
             LogicalJobPlan logicalPlan,
             PhysicalJobPlan physicalPlan,
+            CapabilityNegotiation capabilityNegotiation,
             List<PlanningDiagnostic> diagnostics) {
 
         this.apiVersion = CURRENT_API_VERSION;
         this.mode = Objects.requireNonNull(
                 mode,
                 "mode must not be null");
-        this.valid = true;
         this.logicalPlan = Objects.requireNonNull(
                 logicalPlan,
                 "logicalPlan must not be null");
         this.physicalPlan = physicalPlan;
+        this.capabilityNegotiation = capabilityNegotiation;
+        this.valid = capabilityNegotiation == null
+                || !capabilityNegotiation.isRejected();
         this.diagnostics = Collections.unmodifiableList(
                 new ArrayList<PlanningDiagnostic>(
                         Objects.requireNonNull(
@@ -48,11 +52,19 @@ public final class JobPlanResult {
                 mode,
                 logicalPlan,
                 physicalPlan,
+                capabilityNegotiation,
                 this.diagnostics);
     }
 
+    /** Compatibility overload retained for embedded callers. */
     public static JobPlanResult validated(
             LogicalJobPlan logicalPlan) {
+        return validated(logicalPlan, null);
+    }
+
+    public static JobPlanResult validated(
+            LogicalJobPlan logicalPlan,
+            CapabilityNegotiation capabilityNegotiation) {
 
         List<PlanningDiagnostic> diagnostics =
                 new ArrayList<PlanningDiagnostic>();
@@ -61,18 +73,33 @@ public final class JobPlanResult {
                         "PLAN_VALIDATED",
                         PlanningDiagnostic.Severity.INFO,
                         "VALIDATE",
-                        "Job definition and connector options are valid"));
+                        "Job definition and Connector options are valid"));
+        addNegotiationDiagnostics(
+                diagnostics,
+                capabilityNegotiation);
 
         return new JobPlanResult(
                 Mode.VALIDATE,
                 logicalPlan,
                 null,
+                capabilityNegotiation,
                 diagnostics);
+    }
+
+    /** Compatibility overload retained for embedded callers. */
+    public static JobPlanResult explained(
+            LogicalJobPlan logicalPlan,
+            PhysicalJobPlan physicalPlan) {
+        return explained(
+                logicalPlan,
+                physicalPlan,
+                null);
     }
 
     public static JobPlanResult explained(
             LogicalJobPlan logicalPlan,
-            PhysicalJobPlan physicalPlan) {
+            PhysicalJobPlan physicalPlan,
+            CapabilityNegotiation capabilityNegotiation) {
 
         List<PlanningDiagnostic> diagnostics =
                 new ArrayList<PlanningDiagnostic>();
@@ -80,14 +107,17 @@ public final class JobPlanResult {
                 new PlanningDiagnostic(
                         "PLAN_CREATED",
                         PlanningDiagnostic.Severity.INFO,
-                        "PLAN",
-                        "Physical execution topology was created from the runtime JobGraph"));
+                        "PHYSICAL_PLANNING",
+                        "Physical execution topology was projected from the runtime JobGraph"));
         diagnostics.add(
                 new PlanningDiagnostic(
                         "PLAN_SINK_PREPARATION_SKIPPED",
                         PlanningDiagnostic.Severity.WARNING,
-                        "PREPARE",
-                        "Sink preparation is intentionally skipped during explain to prevent target-side side effects"));
+                        "SINK_PREPARATION",
+                        "Sink preparation is skipped during Explain to prevent target-side side effects"));
+        addNegotiationDiagnostics(
+                diagnostics,
+                capabilityNegotiation);
 
         return new JobPlanResult(
                 Mode.EXPLAIN,
@@ -95,6 +125,7 @@ public final class JobPlanResult {
                 Objects.requireNonNull(
                         physicalPlan,
                         "physicalPlan must not be null"),
+                capabilityNegotiation,
                 diagnostics);
     }
 
@@ -118,6 +149,10 @@ public final class JobPlanResult {
         return physicalPlan;
     }
 
+    public CapabilityNegotiation getCapabilityNegotiation() {
+        return capabilityNegotiation;
+    }
+
     public List<PlanningDiagnostic> getDiagnostics() {
         return diagnostics;
     }
@@ -126,10 +161,21 @@ public final class JobPlanResult {
         return text;
     }
 
+    private static void addNegotiationDiagnostics(
+            List<PlanningDiagnostic> diagnostics,
+            CapabilityNegotiation negotiation) {
+
+        if (negotiation != null) {
+            diagnostics.addAll(
+                    negotiation.diagnostics());
+        }
+    }
+
     private static String render(
             Mode mode,
             LogicalJobPlan logical,
             PhysicalJobPlan physical,
+            CapabilityNegotiation negotiation,
             List<PlanningDiagnostic> diagnostics) {
 
         StringBuilder result = new StringBuilder();
@@ -159,6 +205,19 @@ public final class JobPlanResult {
                 .append(", pipeline=")
                 .append(logical.getRuntime().getPipelineParallelism())
                 .append('\n');
+
+        if (negotiation != null) {
+            result.append("Capabilities:\n");
+            result.append("  Status: ")
+                    .append(negotiation.getStatus().name())
+                    .append('\n');
+            renderEndpoint(
+                    result,
+                    negotiation.getSource());
+            renderEndpoint(
+                    result,
+                    negotiation.getSink());
+        }
 
         if (physical != null) {
             result.append("Physical:\n");
@@ -203,5 +262,30 @@ public final class JobPlanResult {
         }
 
         return result.toString();
+    }
+
+    private static void renderEndpoint(
+            StringBuilder result,
+            CapabilityNegotiation.Endpoint endpoint) {
+
+        result.append("  ")
+                .append(endpoint.getRole().name())
+                .append(" ")
+                .append(endpoint.getConnectorId())
+                .append(": status=")
+                .append(endpoint.getStatus().name())
+                .append(" supported=")
+                .append(endpoint.getSupported())
+                .append(" required=")
+                .append(endpoint.getRequired())
+                .append(" preferred=")
+                .append(endpoint.getPreferred())
+                .append(" derivedRequired=")
+                .append(endpoint.getDerivedRequired())
+                .append(" missingRequired=")
+                .append(endpoint.getMissingRequired())
+                .append(" missingPreferred=")
+                .append(endpoint.getMissingPreferred())
+                .append('\n');
     }
 }
