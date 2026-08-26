@@ -24,7 +24,7 @@ import java.util.Set;
 public final class PlanFingerprint {
 
     private static final String FORMAT_VERSION =
-            "link-up-plan-fingerprint/v2";
+            "link-up-plan-fingerprint/v1";
 
     private PlanFingerprint() {
     }
@@ -51,9 +51,15 @@ public final class PlanFingerprint {
         appendMapping(
                 canonical,
                 job.getColumnMapping());
-        appendCapabilities(
-                canonical,
-                job.getCapabilityRequirements());
+
+        JobCapabilityRequirements capabilities =
+                job.getCapabilityRequirements();
+        if (capabilities != null
+                && !capabilities.isEmpty()) {
+            appendCapabilities(
+                    canonical,
+                    capabilities);
+        }
 
         return "sha256:" + sha256(canonical.toString());
     }
@@ -119,23 +125,21 @@ public final class PlanFingerprint {
             StringBuilder canonical,
             JobCapabilityRequirements requirements) {
 
-        JobCapabilityRequirements safe =
-                requirements == null
-                        ? JobCapabilityRequirements.empty()
-                        : requirements;
-
+        appendToken(
+                canonical,
+                "capability-intent/v1");
         appendCapabilitySet(
                 canonical,
-                safe.getSourceRequired());
+                requirements.getSourceRequired());
         appendCapabilitySet(
                 canonical,
-                safe.getSourcePreferred());
+                requirements.getSourcePreferred());
         appendCapabilitySet(
                 canonical,
-                safe.getSinkRequired());
+                requirements.getSinkRequired());
         appendCapabilitySet(
                 canonical,
-                safe.getSinkPreferred());
+                requirements.getSinkPreferred());
     }
 
     private static void appendCapabilitySet(

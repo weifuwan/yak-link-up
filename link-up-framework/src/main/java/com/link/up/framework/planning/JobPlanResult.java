@@ -9,7 +9,7 @@ import java.util.Objects;
 public final class JobPlanResult {
 
     public static final String CURRENT_API_VERSION =
-            "link-up-plan/v2";
+            "link-up-plan/v1";
 
     public enum Mode {
         VALIDATE,

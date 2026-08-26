@@ -1,5 +1,7 @@
 package com.link.up.server.infrastructure.persistence;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.up.server.domain.JobAttemptStatus;
 import com.link.up.server.runtime.JobAttemptMetadata;
 import com.link.up.server.runtime.JobExecutionMetadata;
@@ -8,7 +10,6 @@ import com.link.up.server.runtime.JobSnapshot;
 import com.link.up.server.runtime.ServerJobStatus;
 import org.junit.Test;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -106,14 +107,25 @@ public class FileJobRepositoryStructuredErrorTest {
                     "NONE",
                     restored.getFailureRetryScope());
 
-            String persisted = new String(
-                    Files.readAllBytes(
-                            firstRegularFile(directory)),
-                    StandardCharsets.UTF_8);
+            JsonNode persisted = new ObjectMapper()
+                    .readTree(
+                            firstRegularFile(directory)
+                                    .toFile());
+            assertEquals(
+                    3,
+                    persisted.get("formatVersion").asInt());
+            assertEquals(
+                    "PLAN-005",
+                    persisted.path("metadata")
+                            .path("attempts")
+                            .get(0)
+                            .path("structuredErrorCode")
+                            .asText());
             assertTrue(
-                    persisted.contains(
-                            "\"formatVersion\":3"));
-            assertTrue(persisted.contains("PLAN-005"));
+                    persisted.path("metadata")
+                            .path("attempts")
+                            .get(0)
+                            .has("failureRetryable"));
         } finally {
             deleteRecursively(directory);
         }

@@ -10,7 +10,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     CONFIG_VALIDATION_FAILED(
             "API-01",
-            "Configuration item validation failed",
+            "Configuration item validate failed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.OPTION_VALIDATION,
             false,
@@ -18,7 +18,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     OPTION_VALIDATION_FAILED(
             "API-02",
-            "Option item validation failed",
+            "Option item validate failed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.OPTION_VALIDATION,
             false,
@@ -26,7 +26,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     CATALOG_INITIALIZE_FAILED(
             "API-03",
-            "Catalog initialization failed",
+            "Catalog initialize failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.SOURCE_DISCOVERY,
             true,
@@ -34,7 +34,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     DATABASE_NOT_EXISTED(
             "API-04",
-            "Database does not exist",
+            "Database not existed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.SOURCE_DISCOVERY,
             false,
@@ -42,7 +42,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     TABLE_NOT_EXISTED(
             "API-05",
-            "Table does not exist",
+            "Table not existed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.SOURCE_DISCOVERY,
             false,
@@ -50,7 +50,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     FACTORY_INITIALIZE_FAILED(
             "API-06",
-            "Factory initialization failed",
+            "Factory initialize failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.CONNECTOR_RESOLUTION,
             false,
@@ -58,7 +58,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     DATABASE_ALREADY_EXISTED(
             "API-07",
-            "Database already exists",
+            "Database already existed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.SINK_PREPARATION,
             false,
@@ -66,7 +66,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     TABLE_ALREADY_EXISTED(
             "API-08",
-            "Table already exists",
+            "Table already existed",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.SINK_PREPARATION,
             false,
@@ -74,7 +74,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     HANDLE_SAVE_MODE_FAILED(
             "API-09",
-            "Save-mode handling failed",
+            "Handle save mode failed",
             FluxErrorCategory.PREPARATION,
             FluxErrorPhase.SINK_PREPARATION,
             false,
@@ -90,7 +90,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     SINK_TABLE_NOT_EXIST(
             "API-11",
-            "The Sink table does not exist",
+            "The sink table not exist",
             FluxErrorCategory.VALIDATION,
             FluxErrorPhase.SINK_PREPARATION,
             false,
@@ -98,7 +98,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     LIST_DATABASES_FAILED(
             "API-12",
-            "Listing databases failed",
+            "List databases failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.SOURCE_DISCOVERY,
             true,
@@ -106,7 +106,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     LIST_TABLES_FAILED(
             "API-13",
-            "Listing tables failed",
+            "List tables failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.SOURCE_DISCOVERY,
             true,
@@ -114,7 +114,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     GET_PRIMARY_KEY_FAILED(
             "API-14",
-            "Reading primary-key metadata failed",
+            "Get primary key failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.SOURCE_DISCOVERY,
             true,
@@ -122,7 +122,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     METADATA_PROVIDER_INITIALIZE_FAILED(
             "API-15",
-            "Metadata provider initialization failed",
+            "MetaData provider initialize failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.SOURCE_DISCOVERY,
             true,
@@ -130,7 +130,7 @@ public enum FluxApiErrorCode implements FluxErrorCode {
 
     CONNECTOR_INITIALIZE_FAILED(
             "API-16",
-            "Connector initialization failed",
+            "Connector initialize failed",
             FluxErrorCategory.DISCOVERY,
             FluxErrorPhase.CONNECTOR_RESOLUTION,
             false,
