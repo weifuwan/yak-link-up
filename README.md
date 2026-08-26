@@ -10,17 +10,22 @@ Link-Up 是一个轻量、可嵌入的离线数据同步引擎。它把数据同
 - 单节点 Worker：提交、查询、取消、持久化状态、重启恢复。
 - Job / Attempt 模型：同一个 Job 可以保留多次执行尝试。
 - 安全手动重试：只有明确证明“没有已提交或未知数据”的 FAILED Attempt 才允许重试。
+- 提交前校验和 Explain：查看规范化逻辑计划、实际 Source Split/Task 拓扑与稳定指纹。
 
 ## 核心模型
 
 ```text
 JobSpec
   -> JobDefinition
+  -> LogicalJobPlan
   -> PreparedJob
   -> JobGraph
+  -> PhysicalJobPlan (Explain projection)
   -> ExecutionGraph
   -> JobResult
 ```
+
+`JobGraph` 始终是正式物理执行计划。`PhysicalJobPlan` 只从同一个 `JobGraph` 投影出可序列化、Secret-safe 的 Explain 结果，不维护第二套执行真相。
 
 Worker 控制面：
 
@@ -44,6 +49,43 @@ job-100 / Attempt #1 FAILED
 ```
 
 `LOST`、`CANCELED`、存在已提交数据、存在 unknown commit state、缺少 commit evidence 时，默认拒绝重试。
+
+## Plan / Explain
+
+```text
+POST /api/v1/jobs/validate
+POST /api/v1/jobs/explain
+```
+
+两个接口都接收与结构化提交一致的 JSON 外壳，只要求 `jobSpec` 或 `hocon` 二选一；规划时不要求 `externalExecutionId`、`idempotencyKey` 和 `definitionVersion`。
+
+边界约束：
+
+- `validate` 只做协议编译、Factory 发现和 Connector OptionRule 校验，不创建 Source/Sink，不访问外部系统。
+- `explain` 会创建 Source、发现 Source Schema 并枚举 Split，以生成真实 `JobGraph`。
+- `explain` 不调用 `SinkPreparer`，因此不会建表、清表、执行 DDL、创建 Writer 或写数据。
+- Explain 响应不包含 Connector options、`ReadonlyConfig`、Prepared Connector、ClassLoader 或 Connector 私有 metadata。
+- Connector 完整配置只参与 SHA-256 计划指纹，Secret 不会出现在逻辑计划、物理计划、诊断或文本 Explain 中。
+
+示例请求：
+
+```json
+{
+  "jobSpec": {
+    "apiVersion": "link-up/v1",
+    "kind": "BatchSyncJob",
+    "name": "orders-sync",
+    "source": {
+      "connectorId": "jdbc",
+      "options": {}
+    },
+    "sink": {
+      "connectorId": "jdbc",
+      "options": {}
+    }
+  }
+}
+```
 
 ## 模块
 
@@ -86,6 +128,8 @@ data/worker-state
 常用接口：
 
 ```text
+POST   /api/v1/jobs/validate
+POST   /api/v1/jobs/explain
 POST   /api/v1/jobs
 GET    /api/v1/jobs/{jobId}
 GET    /api/v1/jobs/{jobId}/logs
