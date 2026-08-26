@@ -14,6 +14,12 @@ public final class RestConstants {
     public static final String JOBS =
             API_PREFIX + "/jobs";
 
+    public static final String JOBS_VALIDATE =
+            JOBS + "/validate";
+
+    public static final String JOBS_EXPLAIN =
+            JOBS + "/explain";
+
     public static final String CONNECTORS =
             API_PREFIX + "/connectors";
 
