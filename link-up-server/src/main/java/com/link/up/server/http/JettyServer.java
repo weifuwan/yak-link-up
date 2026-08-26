@@ -4,11 +4,13 @@ import com.link.up.framework.connector.schema.ConnectorSchemaCatalog;
 import com.link.up.server.config.FluxServerConfig;
 import com.link.up.server.http.servlet.ConnectorsServlet;
 import com.link.up.server.http.servlet.HealthServlet;
+import com.link.up.server.http.servlet.JobPlanningServlet;
 import com.link.up.server.http.servlet.JobResourceServlet;
 import com.link.up.server.http.servlet.JobsServlet;
 import com.link.up.server.http.servlet.NodeServlet;
 import com.link.up.server.http.servlet.NotFoundServlet;
 import com.link.up.server.service.ConnectorRestService;
+import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -36,15 +38,31 @@ public final class JettyServer implements AutoCloseable {
                 config,
                 jobService,
                 new ConnectorRestService(
-                        new ConnectorSchemaCatalog(Collections.emptyList())));
+                        new ConnectorSchemaCatalog(
+                                Collections.emptyList())),
+                null);
     }
 
     public JettyServer(
             FluxServerConfig config,
             JobRestService jobService,
             ConnectorRestService connectorService) {
+        this(
+                config,
+                jobService,
+                connectorService,
+                null);
+    }
 
-        int minimumThreads = Math.min(4, config.getHttpThreads());
+    public JettyServer(
+            FluxServerConfig config,
+            JobRestService jobService,
+            ConnectorRestService connectorService,
+            JobPlanningService planningService) {
+
+        int minimumThreads = Math.min(
+                4,
+                config.getHttpThreads());
         QueuedThreadPool threadPool = new QueuedThreadPool(
                 config.getHttpThreads(),
                 minimumThreads,
@@ -52,7 +70,8 @@ public final class JettyServer implements AutoCloseable {
         threadPool.setName("link-up-http");
 
         this.server = new Server(threadPool);
-        this.server.setStopTimeout(config.getShutdownTimeoutMillis());
+        this.server.setStopTimeout(
+                config.getShutdownTimeoutMillis());
 
         this.connector = new ServerConnector(server);
         connector.setHost(config.getHost());
@@ -61,12 +80,14 @@ public final class JettyServer implements AutoCloseable {
         connector.setAcceptQueueSize(128);
         server.addConnector(connector);
 
-        ServletContextHandler context = new ServletContextHandler(
-                ServletContextHandler.NO_SESSIONS);
+        ServletContextHandler context =
+                new ServletContextHandler(
+                        ServletContextHandler.NO_SESSIONS);
         context.setContextPath("/");
 
         context.addFilter(
-                new FilterHolder(new ExceptionHandlingFilter()),
+                new FilterHolder(
+                        new ExceptionHandlingFilter()),
                 "/*",
                 EnumSet.of(DispatcherType.REQUEST));
 
@@ -74,11 +95,31 @@ public final class JettyServer implements AutoCloseable {
                 new ServletHolder(new HealthServlet()),
                 RestConstants.HEALTH);
         context.addServlet(
-                new ServletHolder(new NodeServlet(jobService)),
+                new ServletHolder(
+                        new NodeServlet(jobService)),
                 RestConstants.NODE);
         context.addServlet(
-                new ServletHolder(new ConnectorsServlet(connectorService)),
+                new ServletHolder(
+                        new ConnectorsServlet(connectorService)),
                 RestConstants.CONNECTORS + "/*");
+
+        if (planningService != null) {
+            context.addServlet(
+                    new ServletHolder(
+                            new JobPlanningServlet(
+                                    planningService,
+                                    JobPlanningServlet.Operation.VALIDATE,
+                                    config.getMaxRequestBytes())),
+                    RestConstants.JOBS_VALIDATE);
+            context.addServlet(
+                    new ServletHolder(
+                            new JobPlanningServlet(
+                                    planningService,
+                                    JobPlanningServlet.Operation.EXPLAIN,
+                                    config.getMaxRequestBytes())),
+                    RestConstants.JOBS_EXPLAIN);
+        }
+
         context.addServlet(
                 new ServletHolder(
                         new JobsServlet(
@@ -123,10 +164,10 @@ public final class JettyServer implements AutoCloseable {
     public void close() {
         try {
             stop();
-        } catch (Exception exception) {
+        } catch (Exception failure) {
             throw new IllegalStateException(
                     "Failed to stop Jetty server",
-                    exception);
+                    failure);
         }
     }
 }

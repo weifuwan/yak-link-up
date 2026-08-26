@@ -4,7 +4,7 @@
 
 Link-Up 是本地优先的离线数据同步引擎。架构只解决现在需要解决的问题：清晰的扩展契约、可测试的本地运行时、稳定的 Worker 控制面，以及安全的失败处理。
 
-不复制 Flink 的分布式复杂度；只借鉴它清晰的角色边界。
+不复制 Flink/Spark 的分布式复杂度；只借鉴它们清晰的角色边界、计划先于执行和可解释运行模型。
 
 ## 模块依赖
 
@@ -30,6 +30,7 @@ Link-Up 是本地优先的离线数据同步引擎。架构只解决现在需要
 ```text
 JobSpec
   -> JobDefinition
+  -> LogicalJobPlan
   -> ConnectorPreparer
   -> PreparedJob
   -> JobPlanner
@@ -57,6 +58,61 @@ JobPlanner
 
 Planner 不创建 Reader、线程、Channel、Split Queue 或 CancellationToken。
 
+## Plan / Explain
+
+Plan / Explain 不创建第二套执行图：
+
+```text
+JobDefinition
+  -> LogicalJobPlan              # 用户意图、默认值、Fingerprint
+  -> ConnectorPreparer
+       validate                  # 无 Connector IO
+       prepareForExplain         # Source discovery + Sink planning stub
+  -> JobPlanner
+  -> JobGraph                    # 与正式执行相同的物理计划
+  -> PhysicalJobPlan             # Secret-safe Explain projection
+  -> JobPlanResult               # JSON + deterministic text + diagnostics
+```
+
+### Validate 边界
+
+`validate` 可以：
+
+- 校验 JobSpec/HOCON；
+- 解析默认值；
+- 发现 Source/Sink Factory；
+- 执行 Connector OptionRule 校验；
+- 生成 LogicalJobPlan 和稳定 Fingerprint。
+
+`validate` 不可以：
+
+- 创建 Source/Sink；
+- 发现远端 Schema；
+- 枚举 Split；
+- 打开连接或执行外部 IO。
+
+### Explain 边界
+
+`explain` 可以：
+
+- 创建 Source；
+- 发现 Source Schema；
+- 枚举并校验 Source Split；
+- 应用字段映射；
+- 使用正式 JobPlanner 生成 JobGraph；
+- 投影 Pipeline/Task 数量、并行度和数据集信息。
+
+`explain` 不可以：
+
+- 调用 SinkPreparer；
+- 创建、删除或清空目标表；
+- 执行目标端 DDL；
+- 创建 SinkWriter；
+- 写入数据；
+- 序列化 Connector options、ReadonlyConfig、Prepared Connector、ClassLoader 或私有 metadata。
+
+完整 Connector 配置只进入 SHA-256 Fingerprint 的内存计算。Fingerprint 能识别包括 Secret 在内的配置变化，但计划和诊断不输出原始值。
+
 ## Control Plane
 
 ```text
@@ -72,6 +128,17 @@ HTTP / registration
         -> JobIdGenerator
   -> infrastructure adapters
 ```
+
+规划 API 是独立的只读控制边界：
+
+```text
+HTTP
+  -> JobPlanningService
+  -> JobPlanExplainer
+  -> ConnectorPreparer / JobPlanner
+```
+
+它不创建 Job、Attempt、Checkpoint，也不进入 JobRuntimeScheduler。
 
 Domain 不持有 `Thread`、`Future`、`Semaphore`、`ExecutorService` 或 framework `JobExecution`。
 

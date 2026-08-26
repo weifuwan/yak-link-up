@@ -17,78 +17,125 @@ import com.link.up.framework.job.SinkDefinition;
 import com.link.up.framework.job.SourceDefinition;
 import com.link.up.framework.mapping.ColumnMappingPlanner;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * Connector 准备器。
- *
- * <p>负责：
- *
- * <ul>
- *     <li>查找 Factory</li>
- *     <li>校验配置</li>
- *     <li>创建 Source</li>
- *     <li>发现 Source Schema</li>
- *     <li>准备 Sink Factory</li>
- * </ul>
- */
+/** Resolves, validates and prepares connector participation in one Job. */
 public final class ConnectorPreparer {
 
     private final FactoryRegistry registry;
-
     private final ClassLoader classLoader;
 
     public ConnectorPreparer(
             FactoryRegistry registry,
             ClassLoader classLoader) {
 
-        this.registry =
-                Objects.requireNonNull(
-                        registry,
-                        "registry must not be null");
-
-        this.classLoader =
-                Objects.requireNonNull(
-                        classLoader,
-                        "classLoader must not be null");
+        this.registry = Objects.requireNonNull(
+                registry,
+                "registry must not be null");
+        this.classLoader = Objects.requireNonNull(
+                classLoader,
+                "classLoader must not be null");
     }
 
-    public PreparedJob prepare(
-            JobDefinition definition) throws Exception {
-
-        Objects.requireNonNull(
+    /**
+     * Validates connector discovery and option rules without creating a Source,
+     * discovering metadata or invoking Sink preparation.
+     */
+    public void validate(JobDefinition definition) {
+        JobDefinition job = Objects.requireNonNull(
                 definition,
                 "definition must not be null");
 
-        PreparedSource<?> source =
-                prepareSource(
-                        definition.getSource(),
-                        definition.getExecutionConfig()
-                                .getSourceParallelism());
-
-        source = applyColumnMapping(source, definition.getColumnMapping());
-
-        Map<String, List<PreparedSink>> sinks =
-                prepareSinks(
-                        definition.getSink(),
-                        definition.getExecutionConfig().getSinkParallelism(),
-                        source.getOutputTables());
-
-        return new PreparedJob(
-                definition.getName(),
-                source,
-                sinks,
-                definition.getExecutionConfig());
+        validateSource(job.getSource());
+        validateSink(job.getSink());
     }
 
-    private <SplitT extends SourceSplit> PreparedSource<SplitT> applyColumnMapping(
+    /** Formal runtime preparation. Existing execution semantics remain here. */
+    public PreparedJob prepare(JobDefinition definition)
+            throws Exception {
+
+        JobDefinition job = Objects.requireNonNull(
+                definition,
+                "definition must not be null");
+        PreparedSource<?> source = prepareSource(
+                job.getSource(),
+                job.getExecutionConfig().getSourceParallelism());
+        source = applyColumnMapping(
+                source,
+                job.getColumnMapping());
+
+        Map<String, List<PreparedSink>> sinks = prepareSinks(
+                job.getSink(),
+                job.getExecutionConfig().getSinkParallelism(),
+                source.getOutputTables());
+
+        return new PreparedJob(
+                job.getName(),
+                source,
+                sinks,
+                job.getExecutionConfig());
+    }
+
+    /**
+     * Planning preparation used by Explain.
+     *
+     * <p>Source creation, schema discovery and split enumeration remain real so
+     * the resulting JobGraph reflects executable topology. Sink option rules are
+     * validated, but {@code SinkPreparer} is never invoked because it may create,
+     * truncate or otherwise mutate target tables.</p>
+     */
+    public PreparedJob prepareForExplain(JobDefinition definition)
+            throws Exception {
+
+        JobDefinition job = Objects.requireNonNull(
+                definition,
+                "definition must not be null");
+        PreparedSource<?> source = prepareSource(
+                job.getSource(),
+                job.getExecutionConfig().getSourceParallelism());
+        source = applyColumnMapping(
+                source,
+                job.getColumnMapping());
+
+        Map<String, List<PreparedSink>> sinks = prepareExplainSinks(
+                job.getSink(),
+                job.getExecutionConfig().getSinkParallelism(),
+                source.getOutputTables());
+
+        return new PreparedJob(
+                job.getName(),
+                source,
+                sinks,
+                job.getExecutionConfig());
+    }
+
+    private void validateSource(SourceDefinition definition) {
+        TableSourceFactory<?> factory = registry.getSourceFactory(
+                definition.getType());
+        ConfigValidator.of(definition.getOptions())
+                .validate(factory.optionRule());
+    }
+
+    private void validateSink(SinkDefinition definition) {
+        SinkFactory factory = registry.getSinkFactory(
+                definition.getType());
+        ConfigValidator.of(definition.getOptions())
+                .validate(factory.optionRule());
+    }
+
+    private <SplitT extends SourceSplit> PreparedSource<SplitT>
+    applyColumnMapping(
             PreparedSource<SplitT> source,
             ColumnMapping mapping) {
+
         ColumnMappingPlanner.Result result =
-                new ColumnMappingPlanner().plan(source.getTables(), mapping);
+                new ColumnMappingPlanner().plan(
+                        source.getTables(),
+                        mapping);
 
         return new PreparedSource<SplitT>(
                 source.getFactoryIdentifier(),
@@ -101,21 +148,17 @@ public final class ConnectorPreparer {
 
     private PreparedSource<?> prepareSource(
             SourceDefinition definition,
-            int sourceParallelism) throws Exception {
+            int sourceParallelism)
+            throws Exception {
 
-        TableSourceFactory<?> factory =
-                registry.getSourceFactory(
-                        definition.getType());
+        TableSourceFactory<?> factory = registry.getSourceFactory(
+                definition.getType());
+        ConfigValidator.of(definition.getOptions())
+                .validate(factory.optionRule());
 
-        ConfigValidator.of(
-                definition.getOptions())
-                .validate(
-                        factory.optionRule());
-
-        SourceFactoryContext context =
-                new SourceFactoryContext(
-                        definition.getOptions(),
-                        classLoader);
+        SourceFactoryContext context = new SourceFactoryContext(
+                definition.getOptions(),
+                classLoader);
 
         return createPreparedSource(
                 definition.getType(),
@@ -124,16 +167,17 @@ public final class ConnectorPreparer {
                 sourceParallelism);
     }
 
-    private <SplitT extends SourceSplit>
-    PreparedSource<SplitT> createPreparedSource(
+    private <SplitT extends SourceSplit> PreparedSource<SplitT>
+    createPreparedSource(
             String identifier,
             TableSourceFactory<SplitT> factory,
             SourceFactoryContext context,
-            int sourceParallelism) throws Exception {
+            int sourceParallelism)
+            throws Exception {
 
-        Source<SplitT> source =
-                createSourceInScope(factory, context);
-
+        Source<SplitT> source = createSourceInScope(
+                factory,
+                context);
         if (source == null) {
             throw new ConnectorException(
                     "Source factory '"
@@ -144,14 +188,14 @@ public final class ConnectorPreparer {
         source.validateParallelism(sourceParallelism);
 
         List<CatalogTable> catalogTables;
-        try (ClassLoaderScope ignored = ClassLoaderScope.open(registry.getClassLoader(factory))) {
+        try (ClassLoaderScope ignored = ClassLoaderScope.open(
+                registry.getClassLoader(factory))) {
             catalogTables = factory.discoverTableSchemas(context);
         }
 
-        Map<TablePath, CatalogTable> tableMap =
-                buildTableMap(
-                        identifier,
-                        catalogTables);
+        Map<TablePath, CatalogTable> tableMap = buildTableMap(
+                identifier,
+                catalogTables);
 
         return new PreparedSource<SplitT>(
                 identifier,
@@ -163,39 +207,124 @@ public final class ConnectorPreparer {
     private Map<String, List<PreparedSink>> prepareSinks(
             SinkDefinition definition,
             int parallelism,
-            Map<TablePath, CatalogTable> sourceTables) throws Exception {
+            Map<TablePath, CatalogTable> sourceTables)
+            throws Exception {
 
-        SinkFactory factory =
-                registry.getSinkFactory(
-                        definition.getType());
+        SinkFactory factory = registry.getSinkFactory(
+                definition.getType());
+        ConfigValidator.of(definition.getOptions())
+                .validate(factory.optionRule());
 
-        ConfigValidator.of(
-                definition.getOptions())
-                .validate(
-                        factory.optionRule());
+        Map<String, List<PreparedSink>> result =
+                new LinkedHashMap<String, List<PreparedSink>>();
 
-        Map<String, List<PreparedSink>> result = new LinkedHashMap<String, List<PreparedSink>>();
-        for (Map.Entry<TablePath, CatalogTable> table : sourceTables.entrySet()) {
-            // Sink preparation is deliberately per dataset: DDL/cleanup and metadata cannot leak across tables.
-            Map<TablePath, CatalogTable> oneTable = new LinkedHashMap<TablePath, CatalogTable>();
-            oneTable.put(table.getKey(), table.getValue());
+        for (Map.Entry<TablePath, CatalogTable> table :
+                sourceTables.entrySet()) {
+
+            Map<TablePath, CatalogTable> oneTable =
+                    oneTable(table);
             PreparedSinkMetadata metadata;
-            try (ClassLoaderScope ignored = ClassLoaderScope.open(registry.getClassLoader(factory))) {
-                metadata = factory.createPreparer(definition.getOptions())
-                        .prepare(new SinkPrepareContext(definition.getOptions(), oneTable));
+
+            try (ClassLoaderScope ignored = ClassLoaderScope.open(
+                    registry.getClassLoader(factory))) {
+                metadata = factory.createPreparer(
+                                definition.getOptions())
+                        .prepare(
+                                new SinkPrepareContext(
+                                        definition.getOptions(),
+                                        oneTable));
             }
-            if (metadata == null)
-                throw new ConnectorException("Sink factory '" + definition.getType() + "' returned null preparation metadata");
-            List<PreparedSink> sinks = new java.util.ArrayList<PreparedSink>(parallelism);
-            for (int i = 0; i < parallelism; i++)
-                sinks.add(new PreparedSink(definition.getType(), factory, definition.getOptions(), metadata, registry.getClassLoader(factory)));
-            result.put(table.getKey().toString(), sinks);
+
+            if (metadata == null) {
+                throw new ConnectorException(
+                        "Sink factory '"
+                                + definition.getType()
+                                + "' returned null preparation metadata");
+            }
+
+            result.put(
+                    table.getKey().toString(),
+                    preparedSinks(
+                            definition,
+                            factory,
+                            metadata,
+                            parallelism));
         }
+
         return result;
     }
 
-    private <SplitT extends SourceSplit> Source<SplitT> createSourceInScope(TableSourceFactory<SplitT> factory, SourceFactoryContext context) throws Exception {
-        try (ClassLoaderScope ignored = ClassLoaderScope.open(registry.getClassLoader(factory))) {
+    private Map<String, List<PreparedSink>> prepareExplainSinks(
+            SinkDefinition definition,
+            int parallelism,
+            Map<TablePath, CatalogTable> sourceTables) {
+
+        SinkFactory factory = registry.getSinkFactory(
+                definition.getType());
+        ConfigValidator.of(definition.getOptions())
+                .validate(factory.optionRule());
+
+        Map<String, List<PreparedSink>> result =
+                new LinkedHashMap<String, List<PreparedSink>>();
+
+        for (Map.Entry<TablePath, CatalogTable> table :
+                sourceTables.entrySet()) {
+
+            PreparedSinkMetadata metadata =
+                    new PreparedSinkMetadata(
+                            oneTable(table));
+
+            result.put(
+                    table.getKey().toString(),
+                    preparedSinks(
+                            definition,
+                            factory,
+                            metadata,
+                            parallelism));
+        }
+
+        return result;
+    }
+
+    private List<PreparedSink> preparedSinks(
+            SinkDefinition definition,
+            SinkFactory factory,
+            PreparedSinkMetadata metadata,
+            int parallelism) {
+
+        List<PreparedSink> sinks =
+                new ArrayList<PreparedSink>(parallelism);
+
+        for (int index = 0; index < parallelism; index++) {
+            sinks.add(
+                    new PreparedSink(
+                            definition.getType(),
+                            factory,
+                            definition.getOptions(),
+                            metadata,
+                            registry.getClassLoader(factory)));
+        }
+
+        return sinks;
+    }
+
+    private Map<TablePath, CatalogTable> oneTable(
+            Map.Entry<TablePath, CatalogTable> table) {
+
+        Map<TablePath, CatalogTable> result =
+                new LinkedHashMap<TablePath, CatalogTable>();
+        result.put(table.getKey(), table.getValue());
+        return result;
+    }
+
+    private <SplitT extends SourceSplit> Source<SplitT>
+    createSourceInScope(
+            TableSourceFactory<SplitT> factory,
+            SourceFactoryContext context)
+            throws Exception {
+
+        try (ClassLoaderScope ignored = ClassLoaderScope.open(
+                registry.getClassLoader(factory))) {
             return factory.createSource(context);
         }
     }
@@ -210,7 +339,6 @@ public final class ConnectorPreparer {
                             + factoryIdentifier
                             + "' returned null catalog tables");
         }
-
         if (catalogTables.isEmpty()) {
             throw new ConnectorException(
                     "No source tables were discovered by factory '"
@@ -219,9 +347,7 @@ public final class ConnectorPreparer {
         }
 
         Map<TablePath, CatalogTable> result =
-                new LinkedHashMap<
-                        TablePath,
-                        CatalogTable>();
+                new LinkedHashMap<TablePath, CatalogTable>();
 
         for (CatalogTable catalogTable : catalogTables) {
             if (catalogTable == null) {
@@ -231,9 +357,7 @@ public final class ConnectorPreparer {
                                 + "' returned a null CatalogTable");
             }
 
-            TablePath tablePath =
-                    catalogTable.getTablePath();
-
+            TablePath tablePath = catalogTable.getTablePath();
             if (tablePath == null) {
                 throw new ConnectorException(
                         "CatalogTable returned by source factory '"
@@ -241,11 +365,9 @@ public final class ConnectorPreparer {
                                 + "' has no TablePath");
             }
 
-            CatalogTable previous =
-                    result.put(
-                            tablePath,
-                            catalogTable);
-
+            CatalogTable previous = result.put(
+                    tablePath,
+                    catalogTable);
             if (previous != null) {
                 throw new ConnectorException(
                         "Duplicated source table path: "
