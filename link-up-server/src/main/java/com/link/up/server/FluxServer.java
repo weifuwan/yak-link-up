@@ -1,7 +1,10 @@
 package com.link.up.server;
 
+import com.link.up.framework.connector.ConnectorPreparer;
 import com.link.up.framework.connector.FactoryRegistry;
 import com.link.up.framework.connector.schema.ConnectorSchemaCatalog;
+import com.link.up.framework.planner.JobPlanner;
+import com.link.up.framework.planning.JobPlanExplainer;
 import com.link.up.server.application.JobApplication;
 import com.link.up.server.application.JobApplicationService;
 import com.link.up.server.application.port.JobExecutor;
@@ -18,6 +21,7 @@ import com.link.up.server.registration.ControlPlaneRegistrationAgent;
 import com.link.up.server.registration.ControlPlaneRegistrationConfig;
 import com.link.up.server.runtime.WorkerIdentity;
 import com.link.up.server.service.ConnectorRestService;
+import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -30,13 +34,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Link-Up single-node offline Worker composition root. */
 public final class FluxServer {
 
-    private static final String LOG_FILE_PROPERTY = "link.up.log.file";
+    private static final String LOG_FILE_PROPERTY =
+            "link.up.log.file";
 
     static {
         configureDefaultLogFile();
     }
 
-    private static final Logger LOG = LogManager.getLogger(FluxServer.class);
+    private static final Logger LOG =
+            LogManager.getLogger(FluxServer.class);
 
     private FluxServer() {
     }
@@ -44,20 +50,40 @@ public final class FluxServer {
     public static void main(String[] args)
             throws Exception {
 
-        final FluxServerConfig config = FluxServerConfig.fromArgs(args);
+        final FluxServerConfig config =
+                FluxServerConfig.fromArgs(args);
 
-        List<Path> pluginDirectories = config.getPluginDirectories();
-        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-        Path[] pluginPaths = pluginDirectories.toArray(
-                new Path[pluginDirectories.size()]);
+        List<Path> pluginDirectories =
+                config.getPluginDirectories();
+        ClassLoader classLoader =
+                Thread.currentThread()
+                        .getContextClassLoader();
+        Path[] pluginPaths =
+                pluginDirectories.toArray(
+                        new Path[pluginDirectories.size()]);
+
+        final FactoryRegistry connectorRegistry =
+                FactoryRegistry.discover(
+                        classLoader,
+                        pluginPaths);
+        ConnectorSchemaCatalog connectorCatalog =
+                ConnectorSchemaCatalog.fromRegistry(
+                        connectorRegistry);
+        ConnectorRestService connectorService =
+                new ConnectorRestService(
+                        connectorCatalog,
+                        connectorRegistry);
 
         JobExecutor jobExecutor =
-                new LocalJobExecutor(classLoader, pluginPaths);
+                new LocalJobExecutor(
+                        classLoader,
+                        pluginPaths);
         JobRepository repository =
                 new FileJobRepository(
                         config.getStateDirectory(),
                         config.getHistoryLimit());
-        JobIdGenerator jobIdGenerator = new LocalJobIdGenerator();
+        JobIdGenerator jobIdGenerator =
+                new LocalJobIdGenerator();
         JobRuntimeScheduler runtimeScheduler =
                 new LocalJobRuntimeScheduler(
                         config.getMaxQueuedJobs(),
@@ -82,18 +108,20 @@ public final class FluxServer {
                         workerIdentity,
                         config.getJobThreads(),
                         config.getMaxQueuedJobs());
-
-        final FactoryRegistry connectorRegistry =
-                FactoryRegistry.discover(classLoader, pluginPaths);
-        ConnectorSchemaCatalog connectorCatalog =
-                ConnectorSchemaCatalog.fromRegistry(connectorRegistry);
-        ConnectorRestService connectorService =
-                new ConnectorRestService(
-                        connectorCatalog,
-                        connectorRegistry);
+        JobPlanningService planningService =
+                new JobPlanningService(
+                        new JobPlanExplainer(
+                                new ConnectorPreparer(
+                                        connectorRegistry,
+                                        classLoader),
+                                new JobPlanner()));
 
         final JettyServer server =
-                new JettyServer(config, jobService, connectorService);
+                new JettyServer(
+                        config,
+                        jobService,
+                        connectorService,
+                        planningService);
 
         final ControlPlaneRegistrationConfig registrationConfig =
                 ControlPlaneRegistrationConfig.load();
@@ -102,43 +130,53 @@ public final class FluxServer {
                         registrationConfig,
                         jobService,
                         connectorCatalog);
-        final AtomicBoolean shutdown = new AtomicBoolean(false);
+        final AtomicBoolean shutdown =
+                new AtomicBoolean(false);
 
         final Runnable shutdownAction =
                 new Runnable() {
                     @Override
                     public void run() {
-                        if (!shutdown.compareAndSet(false, true)) {
+                        if (!shutdown.compareAndSet(
+                                false,
+                                true)) {
                             return;
                         }
+
                         try {
                             registrationAgent.close();
-                        } catch (RuntimeException exception) {
+                        } catch (RuntimeException failure) {
                             LOG.warn(
                                     "Failed to close control-plane registration agent",
-                                    exception);
+                                    failure);
                         }
+
                         try {
                             server.stop();
-                        } catch (Exception exception) {
+                        } catch (Exception failure) {
                             LOG.warn(
                                     "Failed to stop HTTP server",
-                                    exception);
+                                    failure);
                         }
+
                         jobApplication.close();
+
                         try {
                             connectorRegistry.close();
-                        } catch (RuntimeException exception) {
+                        } catch (RuntimeException failure) {
                             LOG.warn(
                                     "Failed to close connector registry",
-                                    exception);
+                                    failure);
                         }
                     }
                 };
 
         Thread shutdownHook =
-                new Thread(shutdownAction, "link-up-shutdown");
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
+                new Thread(
+                        shutdownAction,
+                        "link-up-shutdown");
+        Runtime.getRuntime()
+                .addShutdownHook(shutdownHook);
 
         try {
             server.start();
@@ -160,7 +198,8 @@ public final class FluxServer {
         } finally {
             shutdownAction.run();
             try {
-                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                Runtime.getRuntime()
+                        .removeShutdownHook(shutdownHook);
             } catch (IllegalStateException ignored) {
                 // JVM shutdown already started.
             }
@@ -172,16 +211,23 @@ public final class FluxServer {
                 || hasText(System.getenv("LOGFILE"))) {
             return;
         }
-        String logDirectory = System.getProperty("link.up.log.dir");
+
+        String logDirectory =
+                System.getProperty("link.up.log.dir");
         if (!hasText(logDirectory)) {
-            logDirectory = System.getenv("LINK_UP_LOG_DIR");
+            logDirectory =
+                    System.getenv("LINK_UP_LOG_DIR");
         }
         if (!hasText(logDirectory)) {
             logDirectory = "logs";
         }
+
         System.setProperty(
                 LOG_FILE_PROPERTY,
-                Paths.get(logDirectory, "link-up-server.log").toString());
+                Paths.get(
+                                logDirectory,
+                                "link-up-server.log")
+                        .toString());
     }
 
     private static boolean hasText(String value) {
