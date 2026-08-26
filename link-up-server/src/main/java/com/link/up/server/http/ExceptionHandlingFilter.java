@@ -3,6 +3,7 @@ package com.link.up.server.http;
 import com.link.up.server.application.JobNotFoundException;
 import com.link.up.server.application.JobRetryNotAllowedException;
 import com.link.up.server.application.JobSubmissionConflictException;
+import com.link.up.server.application.port.JobEventHistoryException;
 import com.link.up.server.dto.ErrorResponse;
 import com.link.up.server.runtime.JobStateConflictException;
 
@@ -112,6 +113,12 @@ public final class ExceptionHandlingFilter implements Filter {
                     409,
                     "FLUX-JOB-IDEMPOTENCY-CONFLICT",
                     failure.getMessage());
+        }
+        if (failure instanceof JobEventHistoryException) {
+            return new ErrorMapping(
+                    500,
+                    "FLUX-JOB-EVENT-HISTORY-UNAVAILABLE",
+                    "Job event history is unavailable");
         }
         if (failure instanceof IllegalArgumentException) {
             return new ErrorMapping(

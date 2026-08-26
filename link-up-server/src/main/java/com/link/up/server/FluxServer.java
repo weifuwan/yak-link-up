@@ -7,12 +7,15 @@ import com.link.up.framework.planner.JobPlanner;
 import com.link.up.framework.planning.JobPlanExplainer;
 import com.link.up.server.application.JobApplication;
 import com.link.up.server.application.JobApplicationService;
+import com.link.up.server.application.JobEventBus;
 import com.link.up.server.application.port.JobExecutor;
 import com.link.up.server.application.port.JobIdGenerator;
 import com.link.up.server.application.port.JobRepository;
 import com.link.up.server.application.port.JobRuntimeScheduler;
 import com.link.up.server.config.FluxServerConfig;
 import com.link.up.server.http.JettyServer;
+import com.link.up.server.infrastructure.event.EventPublishingJobRepository;
+import com.link.up.server.infrastructure.event.JsonLineJobEventStore;
 import com.link.up.server.infrastructure.execution.LocalJobExecutor;
 import com.link.up.server.infrastructure.identity.LocalJobIdGenerator;
 import com.link.up.server.infrastructure.persistence.FileJobRepository;
@@ -21,6 +24,7 @@ import com.link.up.server.registration.ControlPlaneRegistrationAgent;
 import com.link.up.server.registration.ControlPlaneRegistrationConfig;
 import com.link.up.server.runtime.WorkerIdentity;
 import com.link.up.server.service.ConnectorRestService;
+import com.link.up.server.service.JobEventRestService;
 import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.apache.logging.log4j.LogManager;
@@ -28,6 +32,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -78,10 +83,20 @@ public final class FluxServer {
                 new LocalJobExecutor(
                         classLoader,
                         pluginPaths);
+        JsonLineJobEventStore jobEventStore =
+                new JsonLineJobEventStore(
+                        config.getStateDirectory());
+        JobEventBus jobEventBus =
+                new JobEventBus(
+                        Collections.singletonList(
+                                jobEventStore));
         JobRepository repository =
-                new FileJobRepository(
-                        config.getStateDirectory(),
-                        config.getHistoryLimit());
+                new EventPublishingJobRepository(
+                        new FileJobRepository(
+                                config.getStateDirectory(),
+                                config.getHistoryLimit()),
+                        jobEventBus,
+                        jobEventStore);
         JobIdGenerator jobIdGenerator =
                 new LocalJobIdGenerator();
         JobRuntimeScheduler runtimeScheduler =
@@ -108,6 +123,10 @@ public final class FluxServer {
                         workerIdentity,
                         config.getJobThreads(),
                         config.getMaxQueuedJobs());
+        JobEventRestService eventService =
+                new JobEventRestService(
+                        jobApplication,
+                        jobEventStore);
         JobPlanningService planningService =
                 new JobPlanningService(
                         new JobPlanExplainer(
@@ -121,7 +140,8 @@ public final class FluxServer {
                         config,
                         jobService,
                         connectorService,
-                        planningService);
+                        planningService,
+                        eventService);
 
         final ControlPlaneRegistrationConfig registrationConfig =
                 ControlPlaneRegistrationConfig.load();
@@ -183,13 +203,17 @@ public final class FluxServer {
             registrationAgent.start();
 
             LOG.info(
-                    "Link-Up Offline Worker started, nodeId={}, instanceId={}, host={}, port={}, jobThreads={}, stateDirectory={}, connectorSchemas={}, pluginDirectories={}, dynamicRegistration={}",
+                    "Link-Up Offline Worker started, nodeId={}, instanceId={}, "
+                            + "host={}, port={}, jobThreads={}, stateDirectory={}, "
+                            + "eventDirectory={}, connectorSchemas={}, "
+                            + "pluginDirectories={}, dynamicRegistration={}",
                     workerIdentity.getNodeId(),
                     workerIdentity.getInstanceId(),
                     config.getHost(),
                     server.getLocalPort(),
                     config.getJobThreads(),
                     config.getStateDirectory(),
+                    jobEventStore.getEventDirectory(),
                     connectorCatalog.list().size(),
                     config.getPluginDirectories(),
                     registrationConfig.isEnabled());
