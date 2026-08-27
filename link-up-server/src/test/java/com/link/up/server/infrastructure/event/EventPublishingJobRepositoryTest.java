@@ -32,7 +32,7 @@ import static org.junit.Assert.assertFalse;
 public class EventPublishingJobRepositoryTest {
 
     @Test
-    public void shouldPublishCheckpointLifecycleInSequence()
+    public void shouldPublishPersistedLifecycleInSequence()
             throws Exception {
 
         RecordingListener listener = new RecordingListener();
@@ -98,7 +98,7 @@ public class EventPublishingJobRepositoryTest {
                 failed.getCreateTimeMillis(),
                 failed.getSubmittedTimeMillis(),
                 previous.getStateVersion(),
-                previous.getCheckpointVersion(),
+                previous.getStateRevision(),
                 failed.getStatus(),
                 previous.getTransitions(),
                 previousAttempts);

@@ -11,7 +11,6 @@ import com.link.up.server.http.servlet.NodeServlet;
 import com.link.up.server.http.servlet.NotFoundServlet;
 import com.link.up.server.service.ConnectorRestService;
 import com.link.up.server.service.JobEventRestService;
-import com.link.up.server.service.JobHistoryRestService;
 import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.eclipse.jetty.server.Server;
@@ -43,7 +42,6 @@ public final class JettyServer implements AutoCloseable {
                         new ConnectorSchemaCatalog(
                                 Collections.emptyList())),
                 null,
-                null,
                 null);
     }
 
@@ -55,7 +53,6 @@ public final class JettyServer implements AutoCloseable {
                 config,
                 jobService,
                 connectorService,
-                null,
                 null,
                 null);
     }
@@ -70,7 +67,6 @@ public final class JettyServer implements AutoCloseable {
                 jobService,
                 connectorService,
                 planningService,
-                null,
                 null);
     }
 
@@ -80,22 +76,6 @@ public final class JettyServer implements AutoCloseable {
             ConnectorRestService connectorService,
             JobPlanningService planningService,
             JobEventRestService eventService) {
-        this(
-                config,
-                jobService,
-                connectorService,
-                planningService,
-                eventService,
-                null);
-    }
-
-    public JettyServer(
-            FluxServerConfig config,
-            JobRestService jobService,
-            ConnectorRestService connectorService,
-            JobPlanningService planningService,
-            JobEventRestService eventService,
-            JobHistoryRestService historyService) {
 
         int minimumThreads = Math.min(
                 4,
@@ -168,7 +148,6 @@ public final class JettyServer implements AutoCloseable {
                         new JobResourceServlet(
                                 jobService,
                                 eventService,
-                                historyService,
                                 config.getMaxRequestBytes())),
                 RestConstants.JOBS + "/*");
         context.addServlet(

@@ -73,12 +73,12 @@ public final class JobPlanExplainer {
 
         PreparedSource<?> preparedSource =
                 prepareSource(job);
-        CapabilityNegotiation preparedNegotiation =
+        CapabilityNegotiation negotiation =
                 capabilityNegotiator.negotiate(
                         job,
                         preparedSource);
         capabilityNegotiator.requireSatisfied(
-                preparedNegotiation);
+                negotiation);
 
         PreparedJob preparedJob;
         try {
@@ -106,13 +106,6 @@ public final class JobPlanExplainer {
                     failure);
         }
 
-        CapabilityNegotiation finalNegotiation =
-                capabilityNegotiator.negotiate(
-                        job,
-                        jobGraph);
-        capabilityNegotiator.requireSatisfied(
-                finalNegotiation);
-
         final PhysicalJobPlan physicalPlan;
         try {
             physicalPlan = PhysicalJobPlan.from(
@@ -126,7 +119,7 @@ public final class JobPlanExplainer {
         return JobPlanResult.explained(
                 logicalPlan,
                 physicalPlan,
-                finalNegotiation);
+                negotiation);
     }
 
     private PreparedSource<?> prepareSource(

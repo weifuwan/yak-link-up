@@ -38,6 +38,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -68,6 +69,9 @@ public class CapabilityNegotiatorTest {
                     .negotiate(definition(requirements));
 
             assertEquals(
+                    "link-up-capability-negotiation/v2",
+                    result.getApiVersion());
+            assertEquals(
                     CapabilityNegotiation.Status.DEGRADED,
                     result.getStatus());
             assertEquals(
@@ -78,6 +82,10 @@ public class CapabilityNegotiatorTest {
                     result.getSource().getMissingRequired().isEmpty());
             assertTrue(
                     result.getSink().getMissingRequired().isEmpty());
+            assertFalse(
+                    containsDiagnostic(
+                            result,
+                            "CAPABILITY_DECLARATION_INCOMPLETE"));
         } finally {
             registry.close();
         }
@@ -131,7 +139,7 @@ public class CapabilityNegotiatorTest {
     }
 
     @Test
-    public void multiTableTopologyShouldDeriveSourceAndSinkRequirement()
+    public void multiTableTopologyShouldFoldDerivedRequirementIntoRequired()
             throws Exception {
 
         FactoryRegistry registry = registry(
@@ -152,12 +160,12 @@ public class CapabilityNegotiatorTest {
                     result.getStatus());
             assertTrue(
                     result.getSource()
-                            .getDerivedRequired()
+                            .getRequired()
                             .contains(
                                     ConnectorCapability.MULTI_TABLE));
             assertTrue(
                     result.getSink()
-                            .getDerivedRequired()
+                            .getRequired()
                             .contains(
                                     ConnectorCapability.MULTI_TABLE));
             assertTrue(
@@ -168,6 +176,17 @@ public class CapabilityNegotiatorTest {
         } finally {
             registry.close();
         }
+    }
+
+    private static boolean containsDiagnostic(
+            CapabilityNegotiation result,
+            String code) {
+        for (PlanningDiagnostic diagnostic : result.diagnostics()) {
+            if (code.equals(diagnostic.getCode())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private CapabilityNegotiator negotiator(

@@ -10,11 +10,18 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 
-/** Secret-safe result of matching Job intent with Connector capabilities. */
+/**
+ * Secret-safe result of checking offline Job requirements against Connector
+ * capabilities.
+ *
+ * <p>The contract intentionally stays small: supported, required, preferred
+ * and the corresponding missing sets. Topology-derived requirements are folded
+ * into required instead of creating a second rules/observation model.</p>
+ */
 public final class CapabilityNegotiation {
 
     public static final String CURRENT_API_VERSION =
-            "link-up-capability-negotiation/v1";
+            "link-up-capability-negotiation/v2";
 
     public enum Status {
         SATISFIED,
@@ -71,7 +78,7 @@ public final class CapabilityNegotiation {
         if (result.isEmpty()) {
             result.add(
                     new PlanningDiagnostic(
-                            "CAPABILITY_NEGOTIATED",
+                            "CAPABILITY_CHECKED",
                             PlanningDiagnostic.Severity.INFO,
                             "CAPABILITY_NEGOTIATION",
                             "Required Connector capabilities are satisfied"));
@@ -111,20 +118,6 @@ public final class CapabilityNegotiation {
                                     + "' does not provide preferred capability "
                                     + capability.name()));
         }
-
-        for (ConnectorCapability capability :
-                endpoint.getUndeclaredObserved()) {
-            result.add(
-                    new PlanningDiagnostic(
-                            "CAPABILITY_DECLARATION_INCOMPLETE",
-                            PlanningDiagnostic.Severity.WARNING,
-                            "CAPABILITY_NEGOTIATION",
-                            endpoint.getRole().name()
-                                    + " connector '"
-                                    + endpoint.getConnectorId()
-                                    + "' demonstrated undeclared capability "
-                                    + capability.name()));
-        }
     }
 
     private static Status status(
@@ -136,9 +129,7 @@ public final class CapabilityNegotiation {
             return Status.REJECTED;
         }
         if (!source.getMissingPreferred().isEmpty()
-                || !sink.getMissingPreferred().isEmpty()
-                || !source.getUndeclaredObserved().isEmpty()
-                || !sink.getUndeclaredObserved().isEmpty()) {
+                || !sink.getMissingPreferred().isEmpty()) {
             return Status.DEGRADED;
         }
         return Status.SATISFIED;
@@ -151,21 +142,17 @@ public final class CapabilityNegotiation {
         private final List<ConnectorCapability> supported;
         private final List<ConnectorCapability> required;
         private final List<ConnectorCapability> preferred;
-        private final List<ConnectorCapability> derivedRequired;
-        private final List<ConnectorCapability> observed;
         private final List<ConnectorCapability> missingRequired;
         private final List<ConnectorCapability> missingPreferred;
-        private final List<ConnectorCapability> undeclaredObserved;
         private final Status status;
 
         Endpoint(
                 ConnectorRole role,
                 String connectorId,
                 Collection<ConnectorCapability> supported,
-                Collection<ConnectorCapability> required,
+                Collection<ConnectorCapability> explicitRequired,
                 Collection<ConnectorCapability> preferred,
-                Collection<ConnectorCapability> derivedRequired,
-                Collection<ConnectorCapability> observed) {
+                Collection<ConnectorCapability> derivedRequired) {
 
             this.role = Objects.requireNonNull(
                     role,
@@ -174,15 +161,13 @@ public final class CapabilityNegotiation {
                     connectorId,
                     "connectorId");
             this.supported = immutable(supported);
-            this.required = immutable(required);
-            this.preferred = immutable(preferred);
-            this.derivedRequired = immutable(derivedRequired);
-            this.observed = immutable(observed);
 
             EnumSet<ConnectorCapability> allRequired =
-                    copy(required);
-            allRequired.addAll(derivedRequired);
+                    copy(explicitRequired);
+            allRequired.addAll(copy(derivedRequired));
 
+            this.required = immutable(allRequired);
+            this.preferred = immutable(preferred);
             this.missingRequired = immutable(
                     difference(
                             allRequired,
@@ -191,15 +176,10 @@ public final class CapabilityNegotiation {
                     difference(
                             preferred,
                             supported));
-            this.undeclaredObserved = immutable(
-                    difference(
-                            observed,
-                            supported));
 
             if (!missingRequired.isEmpty()) {
                 this.status = Status.REJECTED;
-            } else if (!missingPreferred.isEmpty()
-                    || !undeclaredObserved.isEmpty()) {
+            } else if (!missingPreferred.isEmpty()) {
                 this.status = Status.DEGRADED;
             } else {
                 this.status = Status.SATISFIED;
@@ -226,24 +206,12 @@ public final class CapabilityNegotiation {
             return preferred;
         }
 
-        public List<ConnectorCapability> getDerivedRequired() {
-            return derivedRequired;
-        }
-
-        public List<ConnectorCapability> getObserved() {
-            return observed;
-        }
-
         public List<ConnectorCapability> getMissingRequired() {
             return missingRequired;
         }
 
         public List<ConnectorCapability> getMissingPreferred() {
             return missingPreferred;
-        }
-
-        public List<ConnectorCapability> getUndeclaredObserved() {
-            return undeclaredObserved;
         }
 
         public Status getStatus() {

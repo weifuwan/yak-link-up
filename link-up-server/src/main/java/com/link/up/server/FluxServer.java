@@ -25,7 +25,6 @@ import com.link.up.server.registration.ControlPlaneRegistrationConfig;
 import com.link.up.server.runtime.WorkerIdentity;
 import com.link.up.server.service.ConnectorRestService;
 import com.link.up.server.service.JobEventRestService;
-import com.link.up.server.service.JobHistoryRestService;
 import com.link.up.server.service.JobPlanningService;
 import com.link.up.server.service.JobRestService;
 import org.apache.logging.log4j.LogManager;
@@ -128,10 +127,6 @@ public final class FluxServer {
                 new JobEventRestService(
                         jobApplication,
                         jobEventStore);
-        JobHistoryRestService historyService =
-                new JobHistoryRestService(
-                        jobApplication,
-                        jobEventStore);
         JobPlanningService planningService =
                 new JobPlanningService(
                         new JobPlanExplainer(
@@ -146,8 +141,7 @@ public final class FluxServer {
                         jobService,
                         connectorService,
                         planningService,
-                        eventService,
-                        historyService);
+                        eventService);
 
         final ControlPlaneRegistrationConfig registrationConfig =
                 ControlPlaneRegistrationConfig.load();

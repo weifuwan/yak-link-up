@@ -280,8 +280,6 @@ public final class JobPlanResult {
                 .append(endpoint.getRequired())
                 .append(" preferred=")
                 .append(endpoint.getPreferred())
-                .append(" derivedRequired=")
-                .append(endpoint.getDerivedRequired())
                 .append(" missingRequired=")
                 .append(endpoint.getMissingRequired())
                 .append(" missingPreferred=")
