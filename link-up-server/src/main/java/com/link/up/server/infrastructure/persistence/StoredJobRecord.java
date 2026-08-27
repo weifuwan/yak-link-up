@@ -1,5 +1,6 @@
 package com.link.up.server.infrastructure.persistence;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.link.up.api.sink.TableDdl;
 import com.link.up.server.application.port.JobRepositoryEntry;
 import com.link.up.server.domain.JobAttemptStatus;
@@ -15,10 +16,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Versioned JSON persistence model for one Worker Job checkpoint. */
+/** Versioned JSON persistence model for one Worker Job state record. */
 final class StoredJobRecord {
 
-    static final int CURRENT_FORMAT_VERSION = 3;
+    static final int CURRENT_FORMAT_VERSION = 4;
     static final int MIN_SUPPORTED_FORMAT_VERSION = 1;
 
     public int formatVersion;
@@ -96,7 +97,11 @@ final class StoredJobRecord {
         public long submittedTimeMillis;
         public long queuedTimeMillis;
         public long stateVersion;
-        public long checkpointVersion;
+
+        /** Reads the legacy v1-v3 checkpointVersion field without writing it. */
+        @JsonAlias("checkpointVersion")
+        public long stateRevision;
+
         public boolean cancellationRequested;
         public String runId;
         public String jobLogFile;
@@ -130,8 +135,8 @@ final class StoredJobRecord {
                     metadata.getQueuedTimeMillis();
             stored.stateVersion =
                     metadata.getStateVersion();
-            stored.checkpointVersion =
-                    metadata.getCheckpointVersion();
+            stored.stateRevision =
+                    metadata.getStateRevision();
             stored.cancellationRequested =
                     metadata.isCancellationRequested();
             stored.runId = metadata.getRunId();
@@ -177,7 +182,7 @@ final class StoredJobRecord {
                     submittedTimeMillis,
                     queuedTimeMillis,
                     stateVersion,
-                    checkpointVersion,
+                    stateRevision,
                     cancellationRequested,
                     restoredTransitions,
                     Collections.<String, TableDdl>emptyMap(),

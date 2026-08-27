@@ -112,7 +112,7 @@ public final class JobApplicationService
                     state.getJobId(),
                     submission);
             state.markSubmitted();
-            lifecycle.checkpoint(state);
+            lifecycle.persistState(state);
             schedule(state, submission);
         } catch (RuntimeException failure) {
             rollbackSubmission(
@@ -186,7 +186,7 @@ public final class JobApplicationService
                             lifecycle.metadata(active)));
         }
 
-        lifecycle.checkpoint(state);
+        lifecycle.persistState(state);
 
         try {
             schedule(state, submission);
@@ -355,7 +355,7 @@ public final class JobApplicationService
         }
 
         state.requestCancellation();
-        lifecycle.checkpoint(state);
+        lifecycle.persistState(state);
         runtimeScheduler.cancel(normalizedJobId);
         return getJob(normalizedJobId);
     }
@@ -439,7 +439,7 @@ public final class JobApplicationService
                 previousSnapshot.getCreateTimeMillis(),
                 previousMetadata.getSubmittedTimeMillis(),
                 previousMetadata.getStateVersion(),
-                previousMetadata.getCheckpointVersion(),
+                previousMetadata.getStateRevision(),
                 previousSnapshot.getStatus(),
                 previousMetadata.getTransitions(),
                 previousAttempts);

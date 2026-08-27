@@ -27,7 +27,7 @@ public final class JobExecutionState {
     private volatile long startTimeMillis;
     private volatile long endTimeMillis;
     private volatile long stateVersion;
-    private volatile long checkpointVersion;
+    private volatile long stateRevision;
     private volatile ServerJobStatus status = ServerJobStatus.CREATED;
     private volatile boolean cancellationRequested;
     private volatile JobResult result;
@@ -67,7 +67,7 @@ public final class JobExecutionState {
             long createTimeMillis,
             long submittedTimeMillis,
             long stateVersion,
-            long checkpointVersion,
+            long stateRevision,
             ServerJobStatus previousStatus,
             List<JobStateTransition> previousTransitions,
             List<JobExecutionAttempt> previousAttempts) {
@@ -87,7 +87,7 @@ public final class JobExecutionState {
                 createTimeMillis);
         state.submittedTimeMillis = submittedTimeMillis;
         state.stateVersion = stateVersion;
-        state.checkpointVersion = checkpointVersion;
+        state.stateRevision = stateRevision;
         state.status = previousStatus;
         state.transitions.addAll(previousTransitions);
         state.attempts.addAll(previousAttempts);
@@ -147,9 +147,11 @@ public final class JobExecutionState {
             String runId,
             String jobLogFile) {
         this.runId = requireText(runId, "runId");
-        this.jobLogFile = requireText(jobLogFile, "jobLogFile");
+        this.jobLogFile = requireText(
+                jobLogFile,
+                "jobLogFile");
         currentAttempt().bindLogIdentity(this.runId, this.jobLogFile);
-        checkpointVersion++;
+        stateRevision++;
     }
 
     public synchronized boolean requestCancellation() {
@@ -160,7 +162,7 @@ public final class JobExecutionState {
             return false;
         }
         cancellationRequested = true;
-        checkpointVersion++;
+        stateRevision++;
         return true;
     }
 
@@ -228,7 +230,7 @@ public final class JobExecutionState {
             ServerJobStatus target,
             String reason) {
         stateVersion++;
-        checkpointVersion++;
+        stateRevision++;
         status = target;
         transitions.add(
                 new JobStateTransition(
@@ -274,7 +276,15 @@ public final class JobExecutionState {
     public long getStartTimeMillis() { return startTimeMillis; }
     public long getEndTimeMillis() { return endTimeMillis; }
     public long getStateVersion() { return stateVersion; }
-    public long getCheckpointVersion() { return checkpointVersion; }
+    public long getStateRevision() { return stateRevision; }
+
+    /**
+     * @deprecated Worker state persistence is not a data checkpoint. Use
+     * {@link #getStateRevision()}.
+     */
+    @Deprecated
+    public long getCheckpointVersion() { return stateRevision; }
+
     public ServerJobStatus getStatus() { return status; }
     public boolean isCancellationRequested() { return cancellationRequested; }
     public JobResult getResult() { return result; }

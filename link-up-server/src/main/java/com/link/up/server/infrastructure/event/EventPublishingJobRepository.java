@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Repository decorator that publishes one lifecycle fact after a durable
- * checkpoint succeeds.
+ * Repository decorator that publishes one lifecycle fact after durable Worker
+ * state persistence succeeds.
  *
  * <p>The wrapped repository remains the state source of truth. Event delivery
  * is best-effort and listener failures are isolated at this boundary.</p>
@@ -178,14 +178,14 @@ public final class EventPublishingJobRepository
             JobExecutionMetadata metadata) {
 
         if (metadata == null
-                || metadata.getCheckpointVersion() <= 0L
+                || metadata.getStateRevision() <= 0L
                 || !hasAttempt(metadata)) {
             return null;
         }
 
         if (previousMetadata != null
-                && metadata.getCheckpointVersion()
-                <= previousMetadata.getCheckpointVersion()) {
+                && metadata.getStateRevision()
+                <= previousMetadata.getStateRevision()) {
             return null;
         }
 
@@ -205,7 +205,7 @@ public final class EventPublishingJobRepository
                 snapshot.getJobId(),
                 attempt.getAttemptId(),
                 attempt.getAttemptNumber(),
-                metadata.getCheckpointVersion(),
+                metadata.getStateRevision(),
                 occurredAtMillis(
                         runtimeEvent,
                         metadata),

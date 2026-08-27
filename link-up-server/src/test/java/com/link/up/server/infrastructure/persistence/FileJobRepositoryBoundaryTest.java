@@ -12,7 +12,7 @@ import java.util.Set;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/** Architecture guards for durable checkpoint persistence roles. */
+/** Architecture guards for durable Worker state persistence roles. */
 public class FileJobRepositoryBoundaryTest {
 
     @Test
