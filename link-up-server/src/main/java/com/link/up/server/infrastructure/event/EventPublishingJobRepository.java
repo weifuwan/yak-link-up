@@ -10,6 +10,7 @@ import com.link.up.server.runtime.JobSnapshot;
 import com.link.up.server.runtime.JobStateTransition;
 import com.link.up.server.runtime.ServerJobStatus;
 import com.link.up.server.runtime.event.JobEventEnvelope;
+import com.link.up.server.runtime.event.JobExecutionFacts;
 import com.link.up.server.runtime.event.JobRuntimeEvent;
 import com.link.up.server.runtime.event.JobRuntimeEventType;
 import org.apache.logging.log4j.LogManager;
@@ -227,7 +228,7 @@ public final class EventPublishingJobRepository
             }
 
             return statusEvent(
-                    snapshot.getStatus(),
+                    snapshot,
                     metadata,
                     attempt);
         }
@@ -243,7 +244,7 @@ public final class EventPublishingJobRepository
         if (previousSnapshot.getStatus()
                 != snapshot.getStatus()) {
             return statusEvent(
-                    snapshot.getStatus(),
+                    snapshot,
                     metadata,
                     attempt);
         }
@@ -266,10 +267,11 @@ public final class EventPublishingJobRepository
     }
 
     private JobRuntimeEvent statusEvent(
-            ServerJobStatus status,
+            JobSnapshot snapshot,
             JobExecutionMetadata metadata,
             JobAttemptMetadata attempt) {
 
+        ServerJobStatus status = snapshot.getStatus();
         if (status == ServerJobStatus.QUEUED) {
             return transitionEvent(
                     JobRuntimeEventType.JOB_QUEUED,
@@ -287,28 +289,32 @@ public final class EventPublishingJobRepository
                     JobRuntimeEventType.JOB_SUCCEEDED,
                     metadata,
                     status,
-                    null);
+                    null,
+                    snapshot);
         }
         if (status == ServerJobStatus.CANCELED) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_CANCELED,
                     metadata,
                     status,
-                    null);
+                    null,
+                    snapshot);
         }
         if (status == ServerJobStatus.LOST) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_LOST,
                     metadata,
                     status,
-                    attempt.getFailureType());
+                    attempt.getFailureType(),
+                    snapshot);
         }
         if (status == ServerJobStatus.FAILED) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_FAILED,
                     metadata,
                     status,
-                    attempt.getFailureType());
+                    attempt.getFailureType(),
+                    snapshot);
         }
 
         return null;
@@ -339,7 +345,8 @@ public final class EventPublishingJobRepository
             JobRuntimeEventType type,
             JobExecutionMetadata metadata,
             ServerJobStatus fallbackStatus,
-            String failureType) {
+            String failureType,
+            JobSnapshot snapshot) {
 
         JobStateTransition transition =
                 latestTransition(metadata);
@@ -355,7 +362,8 @@ public final class EventPublishingJobRepository
                 transition == null
                         ? null
                         : transition.getReason(),
-                failureType);
+                failureType,
+                JobExecutionFacts.from(snapshot));
     }
 
     private long occurredAtMillis(

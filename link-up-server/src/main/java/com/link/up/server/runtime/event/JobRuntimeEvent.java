@@ -11,9 +11,9 @@ import java.util.Objects;
 /**
  * Secret-safe lifecycle fact stored inside a {@link JobEventEnvelope}.
  *
- * <p>The event intentionally carries no Connector options, arbitrary payload
- * map or Throwable message. Failures are represented only by their Java type
- * until structured runtime errors are introduced.</p>
+ * <p>The optional execution payload is emitted only from durable checkpoints
+ * and contains a bounded, typed projection of Pipeline/Task facts. Connector
+ * options, arbitrary payload maps and Throwable messages remain excluded.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -25,6 +25,24 @@ public final class JobRuntimeEvent {
     private final String reason;
     private final String runId;
     private final String failureType;
+    private final JobExecutionFacts execution;
+
+    public JobRuntimeEvent(
+            JobRuntimeEventType type,
+            ServerJobStatus previousStatus,
+            ServerJobStatus status,
+            String reason,
+            String runId,
+            String failureType) {
+        this(
+                type,
+                previousStatus,
+                status,
+                reason,
+                runId,
+                failureType,
+                null);
+    }
 
     @JsonCreator
     public JobRuntimeEvent(
@@ -33,7 +51,8 @@ public final class JobRuntimeEvent {
             @JsonProperty("status") ServerJobStatus status,
             @JsonProperty("reason") String reason,
             @JsonProperty("runId") String runId,
-            @JsonProperty("failureType") String failureType) {
+            @JsonProperty("failureType") String failureType,
+            @JsonProperty("execution") JobExecutionFacts execution) {
 
         this.type = Objects.requireNonNull(
                 type,
@@ -43,6 +62,7 @@ public final class JobRuntimeEvent {
         this.reason = safeOptionalText(reason, 200);
         this.runId = safeOptionalText(runId, 200);
         this.failureType = safeOptionalText(failureType, 300);
+        this.execution = execution;
     }
 
     public static JobRuntimeEvent transition(
@@ -62,6 +82,7 @@ public final class JobRuntimeEvent {
                 status,
                 reason,
                 null,
+                null,
                 null);
     }
 
@@ -75,6 +96,7 @@ public final class JobRuntimeEvent {
                 status,
                 "job-log-created",
                 requireText(runId, "runId"),
+                null,
                 null);
     }
 
@@ -87,6 +109,7 @@ public final class JobRuntimeEvent {
                 status,
                 "cancellation-requested",
                 null,
+                null,
                 null);
     }
 
@@ -96,6 +119,23 @@ public final class JobRuntimeEvent {
             ServerJobStatus status,
             String reason,
             String failureType) {
+
+        return terminal(
+                type,
+                previousStatus,
+                status,
+                reason,
+                failureType,
+                null);
+    }
+
+    public static JobRuntimeEvent terminal(
+            JobRuntimeEventType type,
+            ServerJobStatus previousStatus,
+            ServerJobStatus status,
+            String reason,
+            String failureType,
+            JobExecutionFacts execution) {
 
         if (!isTerminalType(type)) {
             throw new IllegalArgumentException(
@@ -108,7 +148,8 @@ public final class JobRuntimeEvent {
                 status,
                 reason,
                 null,
-                failureType);
+                failureType,
+                execution);
     }
 
     private static boolean isTerminalType(
@@ -154,27 +195,11 @@ public final class JobRuntimeEvent {
         return normalized;
     }
 
-    public JobRuntimeEventType getType() {
-        return type;
-    }
-
-    public ServerJobStatus getPreviousStatus() {
-        return previousStatus;
-    }
-
-    public ServerJobStatus getStatus() {
-        return status;
-    }
-
-    public String getReason() {
-        return reason;
-    }
-
-    public String getRunId() {
-        return runId;
-    }
-
-    public String getFailureType() {
-        return failureType;
-    }
+    public JobRuntimeEventType getType() { return type; }
+    public ServerJobStatus getPreviousStatus() { return previousStatus; }
+    public ServerJobStatus getStatus() { return status; }
+    public String getReason() { return reason; }
+    public String getRunId() { return runId; }
+    public String getFailureType() { return failureType; }
+    public JobExecutionFacts getExecution() { return execution; }
 }
