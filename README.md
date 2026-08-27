@@ -14,6 +14,7 @@ Link-Up 是一个轻量、可嵌入的离线数据同步引擎。它把数据同
 - Required / Preferred Capability 协商：在 Connector I/O 和 Sink 副作用前发现不兼容任务。
 - 结构化错误：稳定 code、category、phase、retryable、retryScope 和安全参数。
 - 追加式 Runtime Event Journal：按 Job/Attempt 回看提交、排队、运行、取消与终态时间线。
+- Execution History：把 Event、Attempt、Pipeline、Task 和执行指标投影成 Yak-Ops 可直接消费的历史视图。
 
 ## 核心模型
 
@@ -180,7 +181,32 @@ GET /api/v1/jobs/{jobId}/events?afterSequence=0&limit=200
 
 当前阶段仍以 `JobSnapshot` 和 `JobExecutionMetadata` 为控制面状态真相。Event Journal 只负责可观察历史，不反向驱动状态机；事件监听器或文件写入失败会被隔离，不改变任务执行、Commit 或 Retry 语义。
 
-安全边界：事件不保存 JobSpec、Connector options、SQL、Secret、异常正文或 Connector 私有 metadata，只保存稳定生命周期字段、Attempt 身份、状态、原因代码和故障类型。
+终态事件会附带一份 `JobExecutionFacts`：只保存 Pipeline/Task 身份、状态和数值指标，不新增事件序号。这样仍保持“一次 durable checkpoint = 一个 sequence”，同时正常结束的任务在 Worker 重启后仍能恢复最终执行事实。
+
+安全边界：事件不保存 JobSpec、Connector options、SQL、Secret、异常正文、日志路径、当前表/分片或 Connector 私有 metadata。
+
+## Execution History
+
+History API 把事件时间线、Attempt 历史、结构化错误和最终/当前执行事实组合成一个稳定只读视图：
+
+```text
+GET /api/v1/jobs/{jobId}/history?afterSequence=0&limit=200
+```
+
+返回的 `apiVersion` 为 `link-up-job-history/v1`，核心内容包括：
+
+```text
+events          # sequence 游标分页的 durable lifecycle facts
+attempts        # Attempt 状态、结构化错误和 Commit Evidence
+execution       # Metrics + Pipeline + Task 安全投影
+nextSequence
+hasMore
+completed
+```
+
+运行中的 Job 优先使用当前 `JobSnapshot` 生成 execution；Worker 重启后如果基础快照没有 Pipeline/Task 细节，则从终态 Event Journal 中恢复最近一次 `JobExecutionFacts`。History 是观察投影，不参与状态恢复、调度、Retry 或 Commit 决策。
+
+为了保持协议可安全暴露给 Yak-Ops，History 不返回 failure message、retryAdvice、jobLogFile、Connector 物理表地址、currentTable/currentSplit、SQL 或任意 Connector options。
 
 ## 模块
 
@@ -189,7 +215,7 @@ GET /api/v1/jobs/{jobId}/events?afterSequence=0&limit=200
 | `link-up-api` | Connector 扩展契约、Capability、Structured Error 公共模型 |
 | `link-up-framework` | Planning、Capability Negotiation、JobGraph、ExecutionGraph、本地执行运行时 |
 | `link-up-connectors` | JDBC / HTTP / Doris 等实现 |
-| `link-up-server` | Worker 控制面、REST、持久化、Attempt/Retry、Runtime Event Journal |
+| `link-up-server` | Worker 控制面、REST、持久化、Attempt/Retry、Runtime Event Journal、Execution History |
 | `link-up-launcher` | 本地命令行组合入口 |
 | `link-up-dist` | 分发包 |
 | `link-up-bom` | 依赖版本管理 |
@@ -228,6 +254,7 @@ POST   /api/v1/jobs/explain
 POST   /api/v1/jobs
 GET    /api/v1/jobs/{jobId}
 GET    /api/v1/jobs/{jobId}/events
+GET    /api/v1/jobs/{jobId}/history
 GET    /api/v1/jobs/{jobId}/logs
 GET    /api/v1/jobs/{jobId}/metrics
 DELETE /api/v1/jobs/{jobId}
@@ -236,7 +263,7 @@ GET    /api/v1/connectors
 GET    /api/v1/node
 ```
 
-Retry 请求必须重新携带与原 Job 完全一致的结构化提交内容。Worker 不会为了 Retry 把数据库密码、Token 或完整 JobSpec 写进 checkpoint 或 Runtime Event Journal。
+Retry 请求必须重新携带与原 Job 完全一致的结构化提交内容。Worker 不会为了 Retry 或 History 把数据库密码、Token 或完整 JobSpec 写进 checkpoint 或 Runtime Event Journal。
 
 ## 文档
 
