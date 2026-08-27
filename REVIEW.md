@@ -2,32 +2,74 @@
 
 提交 PR 前按这份清单过一遍。
 
-## 问题定位原则
+## 架构驱动的问题处理
 
-遇到运行问题时，先判断问题属于哪一层，再决定修改位置：
+遇到问题时，不从“哪里能改”开始，而是先把现象放回当前架构。
+
+> **先问“这个问题属于谁”，再问“这个问题怎么解决”。**
+
+### 先定位责任边界
 
 ```text
-这是 Connector 问题？
-还是 Executor 问题？
-还是 Planner 问题？
-还是 State 问题？
-还是 Business Config 问题？
+Connector       外部系统协议、SQL、数据类型、分页、Split、写入语义
+Executor        并行执行、Channel、批处理、背压、线程和资源使用
+Planner         Schema、Mapping、Split 规划、Capability、JobGraph
+State           Job / Attempt 生命周期、Cancel、Retry、Worker State Persistence
+Server          REST、Worker 控制面、注册与协议适配
+Business Config batchSize、并行度、超时、表配置、字段映射等用户配置
 ```
 
-典型边界：
+问题定位以 `ARCHITECTURE.md`、`DOMAIN.md`、`DEPENDENCIES.md`、`REQUIREMENTS.md` 和本文件定义的当前边界为准。
 
-- `Connector`：外部系统协议、数据类型、SQL、分页、Split、写入语义。
-- `Executor`：并行执行、Channel、背压、线程、批处理、性能和资源使用。
-- `Planner`：Schema、字段映射、Split 规划、Capability、JobGraph。
-- `State`：Job / Attempt 生命周期、Cancel、Retry、Worker State Persistence。
-- `Business Config`：parallelism、batchSize、timeout、表配置、字段映射等用户配置。
+### 修改代码前回答七个问题
+
+1. **这个问题属于哪一层？**
+2. **是层内部问题，还是层与层之间的契约问题？**
+3. **当前行为违反了哪个已有架构约束？** 如果没有，是否真的缺少一个当前离线同步需要的能力？
+4. **这是局部问题还是公共问题？** 只在一个 Connector / 场景出现，还是多个真实场景反复出现？
+5. **最小修改点在哪里？** 哪个模块、角色、类或接口真正拥有这个问题？
+6. **这次明确不应该改什么？** 把非目标写出来，防止局部问题扩大成 Runtime 重构。
+7. **怎么证明改对了？** 明确单测、集成测试、故障注入、Metrics、日志或真实数据验证中的最小证据链。
+
+输出顺序固定为：
+
+```text
+现象
+  -> 责任层
+  -> 层内问题 / 层间契约问题
+  -> 证据
+  -> 最小修改边界
+  -> 明确非目标
+  -> 验证
+  -> 多个真实场景重复出现后再抽象
+```
 
 处理原则：
 
 - [ ] 优先在问题所属的最小边界内解决，不因为一个具体问题扩大公共抽象。
-- [ ] 一个问题如果可以通过 Connector 或业务配置解决，不先修改 Runtime。
-- [ ] 一个问题如果只存在于单个 Connector，不把复杂度提升到 Framework。
+- [ ] Connector 或业务配置能解决的问题，不先修改 Runtime。
+- [ ] 只在一个 Connector 中出现的问题，不把复杂度提升到 Framework。
+- [ ] 没有证据前，不先设计新的 Scheduler、State、Event 或 Capability 抽象。
 - [ ] 只有多个真实场景反复出现同一种问题时，才考虑抽象成公共能力。
+
+### AI 协作模板
+
+向 AI 提问题时，优先让它在现有架构约束中定位，而不是只说“帮我分析一下”：
+
+```text
+基于 ARCHITECTURE.md、DOMAIN.md、DEPENDENCIES.md、REQUIREMENTS.md 和 REVIEW.md，
+先不要改代码，回答：
+
+1. 问题属于哪一层？
+2. 是层内问题还是层间契约问题？
+3. 当前行为违反了哪个已有约束？
+4. 哪些证据能验证这个判断？
+5. 最小修改边界是什么？这次明确不应该改什么？
+6. 什么情况下才值得提升为 Framework 公共能力？
+7. 最小验证方案是什么？
+
+确认责任边界和证据后，再给出实现方案。
+```
 
 **实战驱动优化，问题就地解决，重复出现再抽象。**
 
