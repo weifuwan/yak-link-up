@@ -3,8 +3,10 @@ package com.link.up.server.service;
 import com.link.up.framework.job.JobDefinition;
 import com.link.up.server.application.JobApplication;
 import com.link.up.server.application.port.JobEventReader;
+import com.link.up.server.domain.JobAttemptStatus;
 import com.link.up.server.domain.JobSubmission;
 import com.link.up.server.dto.JobHistoryResponse;
+import com.link.up.server.runtime.JobAttemptMetadata;
 import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobRecoverySnapshotFactory;
 import com.link.up.server.runtime.JobSnapshot;
@@ -21,53 +23,18 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class JobHistoryRestServiceTest {
 
     @Test
-    public void shouldRecoverExecutionFactsFromJournalAfterRestart() {
-        JobSnapshot restoredSnapshot =
-                JobRecoverySnapshotFactory.restoreBasic(
-                        "job-history-restart",
-                        "history-restart",
-                        ServerJobStatus.SUCCEEDED,
-                        1L,
-                        2L,
-                        3L,
-                        null,
-                        null);
-        JobExecutionMetadata metadata =
-                new JobExecutionMetadata(
-                        "external-history-restart",
-                        "key-history-restart",
-                        1,
-                        "digest-history-restart",
-                        1L,
-                        1L,
-                        5L,
-                        5L,
-                        false,
-                        Collections.<JobStateTransition>emptyList(),
-                        Collections.emptyMap(),
-                        null,
-                        null,
-                        Collections.emptyList());
-
-        JobExecutionFacts retained = retainedExecutionFacts();
-        JobEventEnvelope terminal = JobEventEnvelope.create(
-                "job-history-restart",
-                "job-history-restart-attempt-1",
-                1,
-                5L,
-                5L,
-                JobRuntimeEvent.terminal(
-                        JobRuntimeEventType.JOB_SUCCEEDED,
-                        ServerJobStatus.RUNNING,
-                        ServerJobStatus.SUCCEEDED,
-                        "job-succeeded",
-                        null,
-                        retained));
+    public void shouldRecoverCurrentAttemptExecutionFactsFromJournalAfterRestart() {
+        JobSnapshot restoredSnapshot = restoredSnapshot();
+        JobExecutionMetadata metadata = metadata(
+                "job-history-restart-attempt-1");
+        JobEventEnvelope terminal = terminalEvent(
+                "job-history-restart-attempt-1");
 
         JobHistoryRestService service =
                 new JobHistoryRestService(
@@ -90,6 +57,96 @@ public class JobHistoryRestServiceTest {
                         .getPipelines()
                         .get(0)
                         .getPipelineId());
+    }
+
+    @Test
+    public void shouldNotReuseExecutionFactsFromPreviousAttempt() {
+        JobSnapshot restoredSnapshot = restoredSnapshot();
+        JobExecutionMetadata metadata = metadata(
+                "job-history-restart-attempt-2");
+        JobEventEnvelope staleTerminal = terminalEvent(
+                "job-history-restart-attempt-1");
+
+        JobHistoryRestService service =
+                new JobHistoryRestService(
+                        new StubJobApplication(
+                                restoredSnapshot,
+                                metadata),
+                        new StubEventReader(staleTerminal));
+
+        JobHistoryResponse response = service.history(
+                "job-history-restart",
+                0L,
+                20);
+
+        assertTrue(response.isCompleted());
+        assertEquals(1, response.getEvents().size());
+        assertFalse(response.getExecution().hasExecutionDetails());
+    }
+
+    private static JobSnapshot restoredSnapshot() {
+        return JobRecoverySnapshotFactory.restoreBasic(
+                "job-history-restart",
+                "history-restart",
+                ServerJobStatus.SUCCEEDED,
+                1L,
+                2L,
+                3L,
+                null,
+                null);
+    }
+
+    private static JobExecutionMetadata metadata(
+            String attemptId) {
+
+        JobAttemptMetadata attempt =
+                new JobAttemptMetadata(
+                        attemptId.endsWith("-2") ? 2 : 1,
+                        attemptId,
+                        JobAttemptStatus.SUCCEEDED,
+                        1L,
+                        1L,
+                        2L,
+                        3L,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
+
+        return new JobExecutionMetadata(
+                "external-history-restart",
+                "key-history-restart",
+                1,
+                "digest-history-restart",
+                1L,
+                1L,
+                5L,
+                5L,
+                false,
+                Collections.<JobStateTransition>emptyList(),
+                Collections.emptyMap(),
+                null,
+                null,
+                Collections.singletonList(attempt));
+    }
+
+    private static JobEventEnvelope terminalEvent(
+            String attemptId) {
+
+        return JobEventEnvelope.create(
+                "job-history-restart",
+                attemptId,
+                1,
+                5L,
+                5L,
+                JobRuntimeEvent.terminal(
+                        JobRuntimeEventType.JOB_SUCCEEDED,
+                        ServerJobStatus.RUNNING,
+                        ServerJobStatus.SUCCEEDED,
+                        "job-succeeded",
+                        null,
+                        retainedExecutionFacts()));
     }
 
     private static JobExecutionFacts retainedExecutionFacts() {
