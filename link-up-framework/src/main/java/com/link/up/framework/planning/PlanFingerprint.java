@@ -1,7 +1,9 @@
 package com.link.up.framework.planning;
 
+import com.link.up.api.connector.schema.ConnectorCapability;
 import com.link.up.framework.job.ColumnMapping;
 import com.link.up.framework.job.ExecutionConfig;
+import com.link.up.framework.job.JobCapabilityRequirements;
 import com.link.up.framework.job.JobDefinition;
 
 import java.lang.reflect.Array;
@@ -43,8 +45,21 @@ public final class PlanFingerprint {
         appendValue(
                 canonical,
                 job.getSink().getOptions().getSourceMap());
-        appendExecution(canonical, job.getExecutionConfig());
-        appendMapping(canonical, job.getColumnMapping());
+        appendExecution(
+                canonical,
+                job.getExecutionConfig());
+        appendMapping(
+                canonical,
+                job.getColumnMapping());
+
+        JobCapabilityRequirements capabilities =
+                job.getCapabilityRequirements();
+        if (capabilities != null
+                && !capabilities.isEmpty()) {
+            appendCapabilities(
+                    canonical,
+                    capabilities);
+        }
 
         return "sha256:" + sha256(canonical.toString());
     }
@@ -53,17 +68,39 @@ public final class PlanFingerprint {
             StringBuilder canonical,
             ExecutionConfig config) {
 
-        appendToken(canonical, Integer.toString(config.getBatchSize()));
-        appendToken(canonical, Integer.toString(config.getSourceParallelism()));
-        appendToken(canonical, Integer.toString(config.getSinkParallelism()));
-        appendToken(canonical, Integer.toString(config.getPipelineParallelism()));
-        appendToken(canonical, Integer.toString(config.getMaxBufferedBatches()));
-        appendToken(canonical, Long.toString(config.getMaxBufferedRecords()));
-        appendToken(canonical, Long.toString(config.getMaxBufferedBytes()));
-        appendToken(canonical, Long.toString(config.getMaxRecordsPerSecond()));
-        appendToken(canonical, Long.toString(config.getMaxBytesPerSecond()));
-        appendToken(canonical, config.getSinkPartitionStrategy().name());
-        appendToken(canonical, config.getSplitAssignmentMode().name());
+        appendToken(
+                canonical,
+                Integer.toString(config.getBatchSize()));
+        appendToken(
+                canonical,
+                Integer.toString(config.getSourceParallelism()));
+        appendToken(
+                canonical,
+                Integer.toString(config.getSinkParallelism()));
+        appendToken(
+                canonical,
+                Integer.toString(config.getPipelineParallelism()));
+        appendToken(
+                canonical,
+                Integer.toString(config.getMaxBufferedBatches()));
+        appendToken(
+                canonical,
+                Long.toString(config.getMaxBufferedRecords()));
+        appendToken(
+                canonical,
+                Long.toString(config.getMaxBufferedBytes()));
+        appendToken(
+                canonical,
+                Long.toString(config.getMaxRecordsPerSecond()));
+        appendToken(
+                canonical,
+                Long.toString(config.getMaxBytesPerSecond()));
+        appendToken(
+                canonical,
+                config.getSinkPartitionStrategy().name());
+        appendToken(
+                canonical,
+                config.getSplitAssignmentMode().name());
     }
 
     private static void appendMapping(
@@ -74,10 +111,49 @@ public final class PlanFingerprint {
                 ? ColumnMapping.empty()
                 : mapping;
 
-        appendToken(canonical, Integer.toString(safe.getColumns().size()));
+        appendToken(
+                canonical,
+                Integer.toString(safe.getColumns().size()));
+
         for (ColumnMapping.Item item : safe.getColumns()) {
             appendToken(canonical, item.getSource());
             appendToken(canonical, item.getTarget());
+        }
+    }
+
+    private static void appendCapabilities(
+            StringBuilder canonical,
+            JobCapabilityRequirements requirements) {
+
+        appendToken(
+                canonical,
+                "capability-intent/v1");
+        appendCapabilitySet(
+                canonical,
+                requirements.getSourceRequired());
+        appendCapabilitySet(
+                canonical,
+                requirements.getSourcePreferred());
+        appendCapabilitySet(
+                canonical,
+                requirements.getSinkRequired());
+        appendCapabilitySet(
+                canonical,
+                requirements.getSinkPreferred());
+    }
+
+    private static void appendCapabilitySet(
+            StringBuilder canonical,
+            Set<ConnectorCapability> values) {
+
+        appendToken(
+                canonical,
+                Integer.toString(values.size()));
+
+        for (ConnectorCapability capability : values) {
+            appendToken(
+                    canonical,
+                    capability.name());
         }
     }
 
@@ -89,39 +165,50 @@ public final class PlanFingerprint {
             appendToken(canonical, "null");
             return;
         }
-
         if (value instanceof Map) {
-            appendMap(canonical, (Map<?, ?>) value);
+            appendMap(
+                    canonical,
+                    (Map<?, ?>) value);
             return;
         }
-
         if (value instanceof Set) {
-            appendSet(canonical, (Set<?>) value);
+            appendSet(
+                    canonical,
+                    (Set<?>) value);
             return;
         }
-
         if (value instanceof Collection) {
-            Collection<?> values = (Collection<?>) value;
+            Collection<?> values =
+                    (Collection<?>) value;
             appendToken(canonical, "collection");
-            appendToken(canonical, Integer.toString(values.size()));
+            appendToken(
+                    canonical,
+                    Integer.toString(values.size()));
             for (Object item : values) {
                 appendValue(canonical, item);
             }
             return;
         }
-
         if (value.getClass().isArray()) {
             int length = Array.getLength(value);
             appendToken(canonical, "array");
-            appendToken(canonical, Integer.toString(length));
+            appendToken(
+                    canonical,
+                    Integer.toString(length));
             for (int index = 0; index < length; index++) {
-                appendValue(canonical, Array.get(value, index));
+                appendValue(
+                        canonical,
+                        Array.get(value, index));
             }
             return;
         }
 
-        appendToken(canonical, value.getClass().getName());
-        appendToken(canonical, String.valueOf(value));
+        appendToken(
+                canonical,
+                value.getClass().getName());
+        appendToken(
+                canonical,
+                String.valueOf(value));
     }
 
     private static void appendMap(
@@ -129,7 +216,8 @@ public final class PlanFingerprint {
             Map<?, ?> values) {
 
         List<Map.Entry<?, ?>> entries =
-                new ArrayList<Map.Entry<?, ?>>(values.entrySet());
+                new ArrayList<Map.Entry<?, ?>>(
+                        values.entrySet());
         Collections.sort(
                 entries,
                 new Comparator<Map.Entry<?, ?>>() {
@@ -138,15 +226,24 @@ public final class PlanFingerprint {
                             Map.Entry<?, ?> left,
                             Map.Entry<?, ?> right) {
                         return String.valueOf(left.getKey())
-                                .compareTo(String.valueOf(right.getKey()));
+                                .compareTo(
+                                        String.valueOf(
+                                                right.getKey()));
                     }
                 });
 
         appendToken(canonical, "map");
-        appendToken(canonical, Integer.toString(entries.size()));
+        appendToken(
+                canonical,
+                Integer.toString(entries.size()));
+
         for (Map.Entry<?, ?> entry : entries) {
-            appendToken(canonical, String.valueOf(entry.getKey()));
-            appendValue(canonical, entry.getValue());
+            appendToken(
+                    canonical,
+                    String.valueOf(entry.getKey()));
+            appendValue(
+                    canonical,
+                    entry.getValue());
         }
     }
 
@@ -163,7 +260,10 @@ public final class PlanFingerprint {
         Collections.sort(items);
 
         appendToken(canonical, "set");
-        appendToken(canonical, Integer.toString(items.size()));
+        appendToken(
+                canonical,
+                Integer.toString(items.size()));
+
         for (String item : items) {
             appendToken(canonical, item);
         }
@@ -173,7 +273,9 @@ public final class PlanFingerprint {
             StringBuilder canonical,
             String value) {
 
-        String safe = value == null ? "null" : value;
+        String safe = value == null
+                ? "null"
+                : value;
         canonical.append(safe.length())
                 .append(':')
                 .append(safe)
@@ -182,10 +284,13 @@ public final class PlanFingerprint {
 
     private static String sha256(String value) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            MessageDigest digest =
+                    MessageDigest.getInstance("SHA-256");
             byte[] bytes = digest.digest(
                     value.getBytes(StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder(bytes.length * 2);
+            StringBuilder result =
+                    new StringBuilder(bytes.length * 2);
+
             for (byte current : bytes) {
                 result.append(
                         String.format(

@@ -30,6 +30,7 @@ public final class JobSpec implements Serializable {
     private Connector sink;
     private Runtime runtime = new Runtime();
     private Mapping mapping;
+    private CapabilityRequirements capabilities;
 
     public JobSpec() {
     }
@@ -89,6 +90,16 @@ public final class JobSpec implements Serializable {
 
     public void setMapping(Mapping mapping) {
         this.mapping = mapping;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public CapabilityRequirements getCapabilities() {
+        return capabilities;
+    }
+
+    public void setCapabilities(
+            CapabilityRequirements capabilities) {
+        this.capabilities = capabilities;
     }
 
     public static final class Connector
@@ -164,6 +175,69 @@ public final class JobSpec implements Serializable {
 
         public void setTarget(String target) {
             this.target = target;
+        }
+    }
+
+    /** Explicit required/preferred Connector capabilities for this Job. */
+    public static final class CapabilityRequirements
+            implements Serializable {
+
+        private Endpoint source = new Endpoint();
+        private Endpoint sink = new Endpoint();
+
+        public CapabilityRequirements() {
+        }
+
+        public Endpoint getSource() {
+            return source;
+        }
+
+        public void setSource(Endpoint source) {
+            this.source = source == null
+                    ? new Endpoint()
+                    : source;
+        }
+
+        public Endpoint getSink() {
+            return sink;
+        }
+
+        public void setSink(Endpoint sink) {
+            this.sink = sink == null
+                    ? new Endpoint()
+                    : sink;
+        }
+    }
+
+    public static final class Endpoint
+            implements Serializable {
+
+        private List<String> required =
+                new ArrayList<String>();
+        private List<String> preferred =
+                new ArrayList<String>();
+
+        public Endpoint() {
+        }
+
+        public List<String> getRequired() {
+            return required;
+        }
+
+        public void setRequired(List<String> required) {
+            this.required = required == null
+                    ? new ArrayList<String>()
+                    : new ArrayList<String>(required);
+        }
+
+        public List<String> getPreferred() {
+            return preferred;
+        }
+
+        public void setPreferred(List<String> preferred) {
+            this.preferred = preferred == null
+                    ? new ArrayList<String>()
+                    : new ArrayList<String>(preferred);
         }
     }
 
@@ -271,8 +345,7 @@ public final class JobSpec implements Serializable {
 
         public void setSinkPartitionStrategy(
                 String sinkPartitionStrategy) {
-            this.sinkPartitionStrategy =
-                    sinkPartitionStrategy;
+            this.sinkPartitionStrategy = sinkPartitionStrategy;
         }
 
         public String getSplitAssignmentMode() {
@@ -281,8 +354,7 @@ public final class JobSpec implements Serializable {
 
         public void setSplitAssignmentMode(
                 String splitAssignmentMode) {
-            this.splitAssignmentMode =
-                    splitAssignmentMode;
+            this.splitAssignmentMode = splitAssignmentMode;
         }
     }
 }

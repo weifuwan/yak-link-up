@@ -1,5 +1,6 @@
 package com.link.up.server.domain;
 
+import com.link.up.api.exception.FluxRuntimeException;
 import com.link.up.framework.job.CommitSummary;
 import com.link.up.framework.job.JobResult;
 import com.link.up.server.runtime.ServerJobStatus;
@@ -21,6 +22,12 @@ public final class JobExecutionAttempt {
     private volatile String failureMessage;
     private volatile String retryAdvice;
 
+    private volatile String errorCode;
+    private volatile String errorCategory;
+    private volatile String errorPhase;
+    private volatile boolean failureRetryable;
+    private volatile String failureRetryScope;
+
     private volatile boolean commitEvidenceAvailable;
     private volatile int dataCommittedTaskCount;
     private volatile long successfullyCommittedRecordCount;
@@ -28,15 +35,23 @@ public final class JobExecutionAttempt {
     private volatile boolean partialDataCommit;
     private volatile String commitScope;
 
-    JobExecutionAttempt(String jobId, int attemptNumber) {
+    JobExecutionAttempt(
+            String jobId,
+            int attemptNumber) {
+
         if (attemptNumber <= 0) {
             throw new IllegalArgumentException(
                     "attemptNumber must be greater than 0");
         }
-        String normalizedJobId = requireText(jobId, "jobId");
+
+        String normalizedJobId =
+                requireText(jobId, "jobId");
         this.attemptNumber = attemptNumber;
-        this.attemptId = normalizedJobId + "-attempt-" + attemptNumber;
-        this.createTimeMillis = System.currentTimeMillis();
+        this.attemptId = normalizedJobId
+                + "-attempt-"
+                + attemptNumber;
+        this.createTimeMillis =
+                System.currentTimeMillis();
         this.status = JobAttemptStatus.CREATED;
     }
 
@@ -53,6 +68,11 @@ public final class JobExecutionAttempt {
             String failureType,
             String failureMessage,
             String retryAdvice,
+            String errorCode,
+            String errorCategory,
+            String errorPhase,
+            boolean failureRetryable,
+            String failureRetryScope,
             boolean commitEvidenceAvailable,
             int dataCommittedTaskCount,
             long successfullyCommittedRecordCount,
@@ -61,7 +81,9 @@ public final class JobExecutionAttempt {
             String commitScope) {
 
         this.attemptNumber = attemptNumber;
-        this.attemptId = requireText(attemptId, "attemptId");
+        this.attemptId = requireText(
+                attemptId,
+                "attemptId");
         this.status = status;
         this.createTimeMillis = createTimeMillis;
         this.queuedTimeMillis = queuedTimeMillis;
@@ -72,14 +94,24 @@ public final class JobExecutionAttempt {
         this.failureType = failureType;
         this.failureMessage = failureMessage;
         this.retryAdvice = retryAdvice;
-        this.commitEvidenceAvailable = commitEvidenceAvailable;
-        this.dataCommittedTaskCount = dataCommittedTaskCount;
-        this.successfullyCommittedRecordCount = successfullyCommittedRecordCount;
-        this.unknownStateRecordCount = unknownStateRecordCount;
+        this.errorCode = errorCode;
+        this.errorCategory = errorCategory;
+        this.errorPhase = errorPhase;
+        this.failureRetryable = failureRetryable;
+        this.failureRetryScope = failureRetryScope;
+        this.commitEvidenceAvailable =
+                commitEvidenceAvailable;
+        this.dataCommittedTaskCount =
+                dataCommittedTaskCount;
+        this.successfullyCommittedRecordCount =
+                successfullyCommittedRecordCount;
+        this.unknownStateRecordCount =
+                unknownStateRecordCount;
         this.partialDataCommit = partialDataCommit;
         this.commitScope = commitScope;
     }
 
+    /** Compatibility restore overload for persisted format v1/v2. */
     public static JobExecutionAttempt restore(
             int attemptNumber,
             String attemptId,
@@ -100,9 +132,62 @@ public final class JobExecutionAttempt {
             boolean partialDataCommit,
             String commitScope) {
 
+        return restore(
+                attemptNumber,
+                attemptId,
+                status,
+                createTimeMillis,
+                queuedTimeMillis,
+                startTimeMillis,
+                endTimeMillis,
+                runId,
+                jobLogFile,
+                failureType,
+                failureMessage,
+                retryAdvice,
+                null,
+                null,
+                null,
+                false,
+                null,
+                commitEvidenceAvailable,
+                dataCommittedTaskCount,
+                successfullyCommittedRecordCount,
+                unknownStateRecordCount,
+                partialDataCommit,
+                commitScope);
+    }
+
+    public static JobExecutionAttempt restore(
+            int attemptNumber,
+            String attemptId,
+            JobAttemptStatus status,
+            long createTimeMillis,
+            long queuedTimeMillis,
+            long startTimeMillis,
+            long endTimeMillis,
+            String runId,
+            String jobLogFile,
+            String failureType,
+            String failureMessage,
+            String retryAdvice,
+            String errorCode,
+            String errorCategory,
+            String errorPhase,
+            boolean failureRetryable,
+            String failureRetryScope,
+            boolean commitEvidenceAvailable,
+            int dataCommittedTaskCount,
+            long successfullyCommittedRecordCount,
+            long unknownStateRecordCount,
+            boolean partialDataCommit,
+            String commitScope) {
+
         if (attemptNumber <= 0 || status == null) {
-            throw new IllegalArgumentException("Invalid restored attempt");
+            throw new IllegalArgumentException(
+                    "Invalid restored attempt");
         }
+
         return new JobExecutionAttempt(
                 attemptNumber,
                 attemptId,
@@ -116,6 +201,11 @@ public final class JobExecutionAttempt {
                 failureType,
                 failureMessage,
                 retryAdvice,
+                errorCode,
+                errorCategory,
+                errorPhase,
+                failureRetryable,
+                failureRetryScope,
                 commitEvidenceAvailable,
                 dataCommittedTaskCount,
                 successfullyCommittedRecordCount,
@@ -139,8 +229,11 @@ public final class JobExecutionAttempt {
     synchronized void bindLogIdentity(
             String runId,
             String jobLogFile) {
+
         this.runId = requireText(runId, "runId");
-        this.jobLogFile = requireText(jobLogFile, "jobLogFile");
+        this.jobLogFile = requireText(
+                jobLogFile,
+                "jobLogFile");
     }
 
     synchronized void complete(
@@ -151,31 +244,44 @@ public final class JobExecutionAttempt {
         if (status.isTerminal()) {
             return;
         }
+
         status = attemptStatus(finalStatus);
         endTimeMillis = System.currentTimeMillis();
-        recordFailure(failure != null
-                ? failure
-                : result == null ? null : result.getFailure());
+        recordFailure(
+                failure != null
+                        ? failure
+                        : result == null
+                        ? null
+                        : result.getFailure());
 
         CommitSummary summary = result == null
                 ? null
                 : result.getCommitSummary();
+
         if (summary != null) {
             commitEvidenceAvailable = true;
-            dataCommittedTaskCount = summary.getDataCommittedTaskCount();
+            dataCommittedTaskCount =
+                    summary.getDataCommittedTaskCount();
             successfullyCommittedRecordCount =
                     summary.getSuccessfullyCommittedRecordCount();
-            unknownStateRecordCount = summary.getUnknownStateRecordCount();
-            partialDataCommit = summary.isPartialDataCommit();
-            commitScope = summary.getCommitScope().name();
-            retryAdvice = normalize(summary.getRetryAdvice());
+            unknownStateRecordCount =
+                    summary.getUnknownStateRecordCount();
+            partialDataCommit =
+                    summary.isPartialDataCommit();
+            commitScope =
+                    summary.getCommitScope().name();
+            retryAdvice = normalize(
+                    summary.getRetryAdvice());
         }
     }
 
-    synchronized void completeBeforeExecution(Throwable failure) {
+    synchronized void completeBeforeExecution(
+            Throwable failure) {
+
         if (status.isTerminal()) {
             return;
         }
+
         status = JobAttemptStatus.FAILED;
         endTimeMillis = System.currentTimeMillis();
         recordFailure(failure);
@@ -185,18 +291,52 @@ public final class JobExecutionAttempt {
         unknownStateRecordCount = 0L;
         partialDataCommit = false;
         commitScope = null;
-        retryAdvice = "Execution did not start; replay is safe.";
+        retryAdvice =
+                "Execution did not start; replay is safe.";
     }
 
     private void recordFailure(Throwable failure) {
         if (failure == null) {
             return;
         }
+
         failureType = failure.getClass().getSimpleName();
         failureMessage = safeMessage(failure);
+
+        FluxRuntimeException structured =
+                structuredFailure(failure);
+        if (structured == null) {
+            return;
+        }
+
+        errorCode = structured.getFluxErrorCode().getCode();
+        errorCategory = structured.getErrorCategory().name();
+        errorPhase = structured.getErrorPhase().name();
+        failureRetryable = structured.isRetryable();
+        failureRetryScope =
+                structured.getRetryScope().name();
     }
 
-    private void requireStatus(JobAttemptStatus expected) {
+    private FluxRuntimeException structuredFailure(
+            Throwable failure) {
+
+        Throwable current = failure;
+        int depth = 0;
+
+        while (current != null && depth < 20) {
+            if (current instanceof FluxRuntimeException) {
+                return (FluxRuntimeException) current;
+            }
+            current = current.getCause();
+            depth++;
+        }
+
+        return null;
+    }
+
+    private void requireStatus(
+            JobAttemptStatus expected) {
+
         if (status != expected) {
             throw new IllegalStateException(
                     "Illegal attempt state transition: "
@@ -206,7 +346,9 @@ public final class JobExecutionAttempt {
         }
     }
 
-    private static JobAttemptStatus attemptStatus(ServerJobStatus status) {
+    private static JobAttemptStatus attemptStatus(
+            ServerJobStatus status) {
+
         if (status == ServerJobStatus.SUCCEEDED) {
             return JobAttemptStatus.SUCCEEDED;
         }
@@ -219,10 +361,14 @@ public final class JobExecutionAttempt {
         return JobAttemptStatus.FAILED;
     }
 
-    private static String requireText(String value, String name) {
+    private static String requireText(
+            String value,
+            String name) {
+
         String normalized = normalize(value);
         if (normalized == null) {
-            throw new IllegalArgumentException(name + " must not be blank");
+            throw new IllegalArgumentException(
+                    name + " must not be blank");
         }
         return normalized;
     }
@@ -232,7 +378,9 @@ public final class JobExecutionAttempt {
             return null;
         }
         String normalized = value.trim();
-        return normalized.isEmpty() ? null : normalized;
+        return normalized.isEmpty()
+                ? null
+                : normalized;
     }
 
     private static String safeMessage(Throwable failure) {
@@ -240,7 +388,8 @@ public final class JobExecutionAttempt {
         if (message == null) {
             message = failure.getClass().getSimpleName();
         }
-        message = message.replace('\r', ' ').replace('\n', ' ');
+        message = message.replace('\r', ' ')
+                .replace('\n', ' ');
         return message.length() <= 500
                 ? message
                 : message.substring(0, 500);
@@ -258,6 +407,11 @@ public final class JobExecutionAttempt {
     public String getFailureType() { return failureType; }
     public String getFailureMessage() { return failureMessage; }
     public String getRetryAdvice() { return retryAdvice; }
+    public String getErrorCode() { return errorCode; }
+    public String getErrorCategory() { return errorCategory; }
+    public String getErrorPhase() { return errorPhase; }
+    public boolean isFailureRetryable() { return failureRetryable; }
+    public String getFailureRetryScope() { return failureRetryScope; }
     public boolean isCommitEvidenceAvailable() { return commitEvidenceAvailable; }
     public int getDataCommittedTaskCount() { return dataCommittedTaskCount; }
     public long getSuccessfullyCommittedRecordCount() { return successfullyCommittedRecordCount; }

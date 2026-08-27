@@ -15,10 +15,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Versioned JSON persistence model for one Worker job checkpoint. */
+/** Versioned JSON persistence model for one Worker Job checkpoint. */
 final class StoredJobRecord {
 
-    static final int CURRENT_FORMAT_VERSION = 2;
+    static final int CURRENT_FORMAT_VERSION = 3;
     static final int MIN_SUPPORTED_FORMAT_VERSION = 1;
 
     public int formatVersion;
@@ -44,16 +44,21 @@ final class StoredJobRecord {
         record.jobId = snapshot.getJobId();
         record.jobName = snapshot.getJobName();
         record.status = snapshot.getStatus().name();
-        record.createTimeMillis = snapshot.getCreateTimeMillis();
-        record.startTimeMillis = snapshot.getStartTimeMillis();
-        record.endTimeMillis = snapshot.getEndTimeMillis();
+        record.createTimeMillis =
+                snapshot.getCreateTimeMillis();
+        record.startTimeMillis =
+                snapshot.getStartTimeMillis();
+        record.endTimeMillis =
+                snapshot.getEndTimeMillis();
         record.errorCode = snapshot.getErrorCode();
         record.errorMessage = snapshot.getErrorMessage();
         record.metadata = StoredMetadata.from(metadata);
         return record;
     }
 
-    void validateFormat(String source) throws IOException {
+    void validateFormat(String source)
+            throws IOException {
+
         if (formatVersion < MIN_SUPPORTED_FORMAT_VERSION
                 || formatVersion > CURRENT_FORMAT_VERSION) {
             throw new IOException(
@@ -197,7 +202,6 @@ final class StoredJobRecord {
 
             StoredTransition stored =
                     new StoredTransition();
-
             stored.version = transition.getVersion();
             stored.fromStatus =
                     transition.getFromStatus() == null
@@ -216,7 +220,8 @@ final class StoredJobRecord {
                     version,
                     fromStatus == null
                             ? null
-                            : ServerJobStatus.valueOf(fromStatus),
+                            : ServerJobStatus.valueOf(
+                                    fromStatus),
                     ServerJobStatus.valueOf(toStatus),
                     transitionTimeMillis,
                     reason);
@@ -236,6 +241,11 @@ final class StoredJobRecord {
         public String failureType;
         public String failureMessage;
         public String retryAdvice;
+        public String structuredErrorCode;
+        public String structuredErrorCategory;
+        public String structuredErrorPhase;
+        public boolean failureRetryable;
+        public String failureRetryScope;
         public boolean commitEvidenceAvailable;
         public int dataCommittedTaskCount;
         public long successfullyCommittedRecordCount;
@@ -250,18 +260,34 @@ final class StoredJobRecord {
                 JobAttemptMetadata attempt) {
 
             StoredAttempt stored = new StoredAttempt();
-            stored.attemptNumber = attempt.getAttemptNumber();
+            stored.attemptNumber =
+                    attempt.getAttemptNumber();
             stored.attemptId = attempt.getAttemptId();
             stored.status = attempt.getStatus().name();
-            stored.createTimeMillis = attempt.getCreateTimeMillis();
-            stored.queuedTimeMillis = attempt.getQueuedTimeMillis();
-            stored.startTimeMillis = attempt.getStartTimeMillis();
-            stored.endTimeMillis = attempt.getEndTimeMillis();
+            stored.createTimeMillis =
+                    attempt.getCreateTimeMillis();
+            stored.queuedTimeMillis =
+                    attempt.getQueuedTimeMillis();
+            stored.startTimeMillis =
+                    attempt.getStartTimeMillis();
+            stored.endTimeMillis =
+                    attempt.getEndTimeMillis();
             stored.runId = attempt.getRunId();
             stored.jobLogFile = attempt.getJobLogFile();
             stored.failureType = attempt.getFailureType();
-            stored.failureMessage = attempt.getFailureMessage();
+            stored.failureMessage =
+                    attempt.getFailureMessage();
             stored.retryAdvice = attempt.getRetryAdvice();
+            stored.structuredErrorCode =
+                    attempt.getErrorCode();
+            stored.structuredErrorCategory =
+                    attempt.getErrorCategory();
+            stored.structuredErrorPhase =
+                    attempt.getErrorPhase();
+            stored.failureRetryable =
+                    attempt.isFailureRetryable();
+            stored.failureRetryScope =
+                    attempt.getFailureRetryScope();
             stored.commitEvidenceAvailable =
                     attempt.isCommitEvidenceAvailable();
             stored.dataCommittedTaskCount =
@@ -290,6 +316,11 @@ final class StoredJobRecord {
                     failureType,
                     failureMessage,
                     retryAdvice,
+                    structuredErrorCode,
+                    structuredErrorCategory,
+                    structuredErrorPhase,
+                    failureRetryable,
+                    failureRetryScope,
                     commitEvidenceAvailable,
                     dataCommittedTaskCount,
                     successfullyCommittedRecordCount,

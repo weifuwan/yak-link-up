@@ -23,45 +23,61 @@ final class JobRetryPolicy {
         if (!status.isTerminal()) {
             return JobRetryDecision.deny(
                     JobRetryDecision.JOB_ACTIVE,
-                    "The job is still active and cannot be retried.",
+                    "The Job is still active and cannot be retried.",
                     nextAttempt);
         }
         if (status == ServerJobStatus.SUCCEEDED) {
             return JobRetryDecision.deny(
                     JobRetryDecision.ALREADY_SUCCEEDED,
-                    "A succeeded job must not be retried.",
+                    "A succeeded Job must not be retried.",
                     nextAttempt);
         }
         if (status == ServerJobStatus.CANCELED) {
             return JobRetryDecision.deny(
                     JobRetryDecision.CANCELED_OUTCOME,
-                    "Cancellation may race with sink commits; retry is not automatically safe.",
+                    "Cancellation may race with Sink commits; retry is not automatically safe.",
                     nextAttempt);
         }
         if (status == ServerJobStatus.LOST) {
             return JobRetryDecision.deny(
                     JobRetryDecision.LOST_OUTCOME_UNKNOWN,
-                    "LOST means the final sink outcome is unknown.",
+                    "LOST means the final Sink outcome is unknown.",
                     nextAttempt);
         }
-        if (status != ServerJobStatus.FAILED || metadata == null) {
+        if (status != ServerJobStatus.FAILED
+                || metadata == null) {
             return evidenceUnavailable(nextAttempt);
         }
 
-        List<JobAttemptMetadata> attempts = metadata.getAttempts();
+        List<JobAttemptMetadata> attempts =
+                metadata.getAttempts();
         if (attempts.isEmpty()) {
             return evidenceUnavailable(nextAttempt);
         }
 
-        JobAttemptMetadata last = attempts.get(attempts.size() - 1);
-        if (last.getStatus() != JobAttemptStatus.FAILED
-                || !last.isCommitEvidenceAvailable()) {
+        JobAttemptMetadata last =
+                attempts.get(attempts.size() - 1);
+        if (last.getStatus() != JobAttemptStatus.FAILED) {
+            return evidenceUnavailable(nextAttempt);
+        }
+
+        if (last.getErrorCode() != null
+                && !last.isFailureRetryable()) {
+            return JobRetryDecision.deny(
+                    JobRetryDecision.NON_RETRYABLE_FAILURE,
+                    "The previous attempt failed with non-retryable structured error "
+                            + last.getErrorCode()
+                            + ".",
+                    nextAttempt);
+        }
+
+        if (!last.isCommitEvidenceAvailable()) {
             return evidenceUnavailable(nextAttempt);
         }
         if (last.getUnknownStateRecordCount() > 0L) {
             return JobRetryDecision.deny(
                     JobRetryDecision.UNKNOWN_COMMIT_STATE,
-                    "The previous attempt contains records with unknown sink commit state.",
+                    "The previous attempt contains records with unknown Sink commit state.",
                     nextAttempt);
         }
         if (last.isPartialDataCommit()
@@ -79,7 +95,8 @@ final class JobRetryPolicy {
                 nextAttempt);
     }
 
-    private JobRetryDecision evidenceUnavailable(int nextAttempt) {
+    private JobRetryDecision evidenceUnavailable(
+            int nextAttempt) {
         return JobRetryDecision.deny(
                 JobRetryDecision.EVIDENCE_UNAVAILABLE,
                 "Commit evidence is unavailable, so retry safety cannot be proven.",

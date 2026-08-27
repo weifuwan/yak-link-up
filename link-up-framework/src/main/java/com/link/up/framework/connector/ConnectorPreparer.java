@@ -1,6 +1,7 @@
 package com.link.up.framework.connector;
 
 import com.link.up.api.configuration.util.ConfigValidator;
+import com.link.up.api.connector.schema.ConnectorCapability;
 import com.link.up.api.factory.SinkFactory;
 import com.link.up.api.sink.PreparedSinkMetadata;
 import com.link.up.api.sink.SinkPrepareContext;
@@ -18,10 +19,13 @@ import com.link.up.framework.job.SourceDefinition;
 import com.link.up.framework.mapping.ColumnMappingPlanner;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Resolves, validates and prepares connector participation in one Job. */
 public final class ConnectorPreparer {
@@ -50,8 +54,56 @@ public final class ConnectorPreparer {
                 definition,
                 "definition must not be null");
 
-        validateSource(job.getSource());
-        validateSink(job.getSink());
+        validateSourceOptions(job.getSource());
+        validateSinkOptions(job.getSink());
+    }
+
+    public void validateSourceOptions(
+            SourceDefinition definition) {
+
+        SourceDefinition source = Objects.requireNonNull(
+                definition,
+                "source definition must not be null");
+        TableSourceFactory<?> factory =
+                registry.getSourceFactory(source.getType());
+        ConfigValidator.of(source.getOptions())
+                .validate(factory.optionRule());
+    }
+
+    public void validateSinkOptions(
+            SinkDefinition definition) {
+
+        SinkDefinition sink = Objects.requireNonNull(
+                definition,
+                "sink definition must not be null");
+        SinkFactory factory =
+                registry.getSinkFactory(sink.getType());
+        ConfigValidator.of(sink.getOptions())
+                .validate(factory.optionRule());
+    }
+
+    /** Returns a defensive Source capability snapshot without creating it. */
+    public Set<ConnectorCapability> sourceCapabilities(
+            String connectorId) {
+
+        TableSourceFactory<?> factory =
+                registry.getSourceFactory(connectorId);
+        return capabilities(
+                factory.capabilities(),
+                connectorId,
+                "source");
+    }
+
+    /** Returns a defensive Sink capability snapshot without creating it. */
+    public Set<ConnectorCapability> sinkCapabilities(
+            String connectorId) {
+
+        SinkFactory factory =
+                registry.getSinkFactory(connectorId);
+        return capabilities(
+                factory.capabilities(),
+                connectorId,
+                "sink");
     }
 
     /** Formal runtime preparation. Existing execution semantics remain here. */
@@ -61,12 +113,42 @@ public final class ConnectorPreparer {
         JobDefinition job = Objects.requireNonNull(
                 definition,
                 "definition must not be null");
+        PreparedSource<?> source = prepareSource(job);
+        return prepare(job, source);
+    }
+
+    /**
+     * Creates and discovers the Source before any Sink preparation occurs.
+     * This boundary allows capability negotiation to reject unsafe multi-table
+     * combinations before target-side DDL or cleanup can run.
+     */
+    public PreparedSource<?> prepareSource(
+            JobDefinition definition)
+            throws Exception {
+
+        JobDefinition job = Objects.requireNonNull(
+                definition,
+                "definition must not be null");
         PreparedSource<?> source = prepareSource(
                 job.getSource(),
                 job.getExecutionConfig().getSourceParallelism());
-        source = applyColumnMapping(
+        return applyColumnMapping(
                 source,
                 job.getColumnMapping());
+    }
+
+    /** Completes formal Sink preparation for an already prepared Source. */
+    public PreparedJob prepare(
+            JobDefinition definition,
+            PreparedSource<?> preparedSource)
+            throws Exception {
+
+        JobDefinition job = Objects.requireNonNull(
+                definition,
+                "definition must not be null");
+        PreparedSource<?> source = Objects.requireNonNull(
+                preparedSource,
+                "preparedSource must not be null");
 
         Map<String, List<PreparedSink>> sinks = prepareSinks(
                 job.getSink(),
@@ -88,18 +170,29 @@ public final class ConnectorPreparer {
      * validated, but {@code SinkPreparer} is never invoked because it may create,
      * truncate or otherwise mutate target tables.</p>
      */
-    public PreparedJob prepareForExplain(JobDefinition definition)
+    public PreparedJob prepareForExplain(
+            JobDefinition definition)
             throws Exception {
 
         JobDefinition job = Objects.requireNonNull(
                 definition,
                 "definition must not be null");
-        PreparedSource<?> source = prepareSource(
-                job.getSource(),
-                job.getExecutionConfig().getSourceParallelism());
-        source = applyColumnMapping(
-                source,
-                job.getColumnMapping());
+        return prepareForExplain(
+                job,
+                prepareSource(job));
+    }
+
+    /** Builds Explain-only Sink stubs for an already prepared Source. */
+    public PreparedJob prepareForExplain(
+            JobDefinition definition,
+            PreparedSource<?> preparedSource) {
+
+        JobDefinition job = Objects.requireNonNull(
+                definition,
+                "definition must not be null");
+        PreparedSource<?> source = Objects.requireNonNull(
+                preparedSource,
+                "preparedSource must not be null");
 
         Map<String, List<PreparedSink>> sinks = prepareExplainSinks(
                 job.getSink(),
@@ -111,20 +204,6 @@ public final class ConnectorPreparer {
                 source,
                 sinks,
                 job.getExecutionConfig());
-    }
-
-    private void validateSource(SourceDefinition definition) {
-        TableSourceFactory<?> factory = registry.getSourceFactory(
-                definition.getType());
-        ConfigValidator.of(definition.getOptions())
-                .validate(factory.optionRule());
-    }
-
-    private void validateSink(SinkDefinition definition) {
-        SinkFactory factory = registry.getSinkFactory(
-                definition.getType());
-        ConfigValidator.of(definition.getOptions())
-                .validate(factory.optionRule());
     }
 
     private <SplitT extends SourceSplit> PreparedSource<SplitT>
@@ -151,8 +230,8 @@ public final class ConnectorPreparer {
             int sourceParallelism)
             throws Exception {
 
-        TableSourceFactory<?> factory = registry.getSourceFactory(
-                definition.getType());
+        TableSourceFactory<?> factory =
+                registry.getSourceFactory(definition.getType());
         ConfigValidator.of(definition.getOptions())
                 .validate(factory.optionRule());
 
@@ -210,8 +289,8 @@ public final class ConnectorPreparer {
             Map<TablePath, CatalogTable> sourceTables)
             throws Exception {
 
-        SinkFactory factory = registry.getSinkFactory(
-                definition.getType());
+        SinkFactory factory =
+                registry.getSinkFactory(definition.getType());
         ConfigValidator.of(definition.getOptions())
                 .validate(factory.optionRule());
 
@@ -259,8 +338,8 @@ public final class ConnectorPreparer {
             int parallelism,
             Map<TablePath, CatalogTable> sourceTables) {
 
-        SinkFactory factory = registry.getSinkFactory(
-                definition.getType());
+        SinkFactory factory =
+                registry.getSinkFactory(definition.getType());
         ConfigValidator.of(definition.getOptions())
                 .validate(factory.optionRule());
 
@@ -376,5 +455,31 @@ public final class ConnectorPreparer {
         }
 
         return result;
+    }
+
+    private Set<ConnectorCapability> capabilities(
+            Set<ConnectorCapability> values,
+            String connectorId,
+            String role) {
+
+        if (values == null) {
+            throw new ConnectorException(
+                    role
+                            + " factory '"
+                            + connectorId
+                            + "' returned null capabilities");
+        }
+
+        Set<ConnectorCapability> copy =
+                new LinkedHashSet<ConnectorCapability>();
+
+        for (ConnectorCapability capability : values) {
+            copy.add(
+                    Objects.requireNonNull(
+                            capability,
+                            "capabilities must not contain null"));
+        }
+
+        return Collections.unmodifiableSet(copy);
     }
 }

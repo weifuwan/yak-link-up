@@ -3,15 +3,46 @@
 ## Job 定义链
 
 ```text
-JobSpec -> JobDefinition -> PreparedJob -> JobGraph -> ExecutionGraph -> JobResult
+JobSpec
+  -> JobDefinition
+  -> LogicalJobPlan
+  -> CapabilityNegotiation
+  -> PreparedJob
+  -> JobGraph
+  -> ExecutionGraph
+  -> JobResult
 ```
 
-- `JobSpec`：外部提交协议。
+- `JobSpec`：外部提交协议，可声明 Required/Preferred Capability。
 - `JobDefinition`：校验、归一化后的内部定义。
+- `LogicalJobPlan`：Secret-safe 用户意图和稳定 Fingerprint。
+- `CapabilityNegotiation`：任务要求与 Connector 声明的匹配结果。
 - `PreparedJob`：Connector 元数据准备完成后的输入。
 - `JobGraph`：不可变物理拓扑。
 - `ExecutionGraph`：单次运行状态。
 - `JobResult`：一次 framework 执行结果。
+
+## Capability
+
+Capability 是稳定执行语义，不是前端控件：
+
+```text
+supported       Connector 声明可提供
+required        Job 显式必须具备
+preferred       Job 希望具备，缺失可降级
+derivedRequired 根据真实拓扑推导的必须能力
+observed        规划过程实际观察到的能力事实
+```
+
+协商状态：
+
+| Status | 含义 |
+| --- | --- |
+| `SATISFIED` | Required 全部满足，没有降级或声明缺口 |
+| `DEGRADED` | Required 满足，但 Preferred 缺失或观察到未声明能力 |
+| `REJECTED` | 至少一个 Required Capability 缺失 |
+
+多表 Source 会为 Source 和 Sink 派生 `MULTI_TABLE` Required Capability。该检查发生在 Sink Preparation 之前，避免不兼容任务产生目标端副作用。
 
 ## Worker Job
 
@@ -57,10 +88,42 @@ Attempt 记录：
 - queue/start/end 时间；
 - `runId` / 日志文件；
 - failure type/message；
+- structured error code/category/phase；
+- failure retryable/retryScope；
 - commit evidence；
 - `retryAdvice`。
 
 Attempt 不拥有线程和 framework 执行对象。
+
+## Structured Error
+
+稳定错误由以下字段组成：
+
+```text
+code
+category
+phase
+retryable
+retryScope
+parameters
+```
+
+当前规划错误目录：
+
+| Code | 含义 |
+| --- | --- |
+| `PLAN-001` | 规划请求非法 |
+| `PLAN-002` | Job 定义编译失败 |
+| `PLAN-003` | Connector 无法解析 |
+| `PLAN-004` | Connector options 非法 |
+| `PLAN-005` | Required Capability 缺失 |
+| `PLAN-006` | Source Preparation / Schema Discovery 失败 |
+| `PLAN-007` | Split Discovery 失败 |
+| `PLAN-008` | Physical Planning 失败 |
+| `PLAN-009` | Sink Preparation 失败 |
+| `PLAN-010` | 未预期的内部规划失败 |
+
+错误参数只放安全身份和枚举。Secret、Connector options、SQL、完整 URL 和原始异常正文不得进入结构化参数。
 
 ## Runtime Event
 
@@ -100,7 +163,7 @@ JOB_LOST
 - 重复或晚到的旧序号不会再次追加。
 - Event 不参与状态恢复、RetryPolicy 或 Commit 判定。
 - Event 不保存用户配置、SQL、Secret 或异常正文。
-- `failureType` 只描述故障类型，不替代后续 Structured Error。
+- Event 继续保存生命周期事实；结构化错误细节从 Attempt read model 查询。
 
 ## Retry Decision
 
@@ -116,6 +179,15 @@ RetryPolicy 输出显式决策码：
 | `EVIDENCE_UNAVAILABLE` | 无法证明安全 |
 | `UNKNOWN_COMMIT_STATE` | 存在未知提交状态 |
 | `DATA_ALREADY_COMMITTED` | 已确认提交数据 |
+| `NON_RETRYABLE_FAILURE` | 结构化错误明确禁止重试 |
+
+错误可重试和数据可重放是两个条件：
+
+```text
+structured error allows retry
+AND
+commit evidence proves zero committed / unknown data
+```
 
 安全策略宁可拒绝，也不猜。
 
@@ -124,5 +196,7 @@ RetryPolicy 输出显式决策码：
 `stateVersion` 只记录业务状态转换。
 
 `checkpointVersion` 记录所有需要持久化的变化，包括日志绑定、取消意图和 Retry Attempt 创建，用于防止旧 checkpoint 覆盖新状态，也作为 Runtime Event 的单 Job 序号。
+
+Checkpoint `formatVersion = 3` 增加 Attempt structured error metadata，并继续兼容读取 v1/v2。
 
 Worker 重启后，遗留的非终态 Job 统一恢复为 `LOST`；不会自动执行 Retry。恢复生成的新 LOST checkpoint 同样会追加 `JOB_LOST` 事件。
