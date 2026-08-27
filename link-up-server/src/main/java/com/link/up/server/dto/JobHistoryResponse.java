@@ -32,7 +32,7 @@ public final class JobHistoryResponse {
     private final long startTimeMillis;
     private final long endTimeMillis;
     private final long durationMillis;
-    private final long checkpointVersion;
+    private final long stateRevision;
     private final List<JobEventEnvelope> events;
     private final long nextSequence;
     private final boolean hasMore;
@@ -80,9 +80,9 @@ public final class JobHistoryResponse {
         this.startTimeMillis = safeSnapshot.getStartTimeMillis();
         this.endTimeMillis = safeSnapshot.getEndTimeMillis();
         this.durationMillis = safeSnapshot.getDurationMillis();
-        this.checkpointVersion = metadata == null
+        this.stateRevision = metadata == null
                 ? 0L
-                : metadata.getCheckpointVersion();
+                : metadata.getStateRevision();
         this.events = Collections.unmodifiableList(
                 new ArrayList<JobEventEnvelope>(
                         safeEventPage.getItems()));
@@ -118,7 +118,15 @@ public final class JobHistoryResponse {
     public long getStartTimeMillis() { return startTimeMillis; }
     public long getEndTimeMillis() { return endTimeMillis; }
     public long getDurationMillis() { return durationMillis; }
-    public long getCheckpointVersion() { return checkpointVersion; }
+    public long getStateRevision() { return stateRevision; }
+
+    /**
+     * @deprecated REST compatibility alias. New clients should use
+     * {@code stateRevision} because this value is not a data checkpoint.
+     */
+    @Deprecated
+    public long getCheckpointVersion() { return stateRevision; }
+
     public List<JobEventEnvelope> getEvents() { return events; }
     public long getNextSequence() { return nextSequence; }
     public boolean isHasMore() { return hasMore; }

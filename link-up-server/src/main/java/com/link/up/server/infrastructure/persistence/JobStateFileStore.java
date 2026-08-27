@@ -15,7 +15,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
-/** Owns Worker checkpoint file naming, JSON IO and atomic replacement. */
+/** Owns Worker state file naming, JSON IO and atomic replacement. */
 final class JobStateFileStore {
 
     private static final String FILE_SUFFIX = ".job.json";

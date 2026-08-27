@@ -14,19 +14,24 @@ import com.link.up.server.runtime.JobSnapshotFactory;
 import com.link.up.server.runtime.ServerJobStatus;
 import org.junit.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class FileJobRepositoryTest {
 
     @Test
-    public void shouldReloadCheckpointAndRejectOlderRevision() throws Exception {
+    public void shouldReloadWorkerStateAndRejectOlderRevision()
+            throws Exception {
         Path directory = Files.createTempDirectory("link-up-state-");
         try {
             FileJobRepository first = new FileJobRepository(directory, 20);
@@ -39,6 +44,11 @@ public class FileJobRepositoryTest {
             first.save(
                     JobSnapshotFactory.create(state, null),
                     JobExecutionMetadata.fromState(state));
+
+            String persisted = readStateFile(directory, "job-file-1");
+            assertTrue(persisted.contains("\"formatVersion\" : 4"));
+            assertTrue(persisted.contains("\"stateRevision\""));
+            assertFalse(persisted.contains("\"checkpointVersion\""));
 
             JobExecutionState stale =
                     new JobExecutionState("job-file-1", submission());
@@ -65,7 +75,7 @@ public class FileJobRepositoryTest {
             assertEquals(
                     JobAttemptStatus.RUNNING,
                     metadata.getAttempts().get(0).getStatus());
-            assertEquals(3L, metadata.getCheckpointVersion());
+            assertEquals(3L, metadata.getStateRevision());
 
             reopened.delete("job-file-1");
             assertNull(reopened.get("job-file-1"));
@@ -76,6 +86,71 @@ public class FileJobRepositoryTest {
         } finally {
             deleteDirectory(directory);
         }
+    }
+
+    @Test
+    public void shouldReadLegacyCheckpointVersionAsStateRevision()
+            throws Exception {
+        Path directory = Files.createTempDirectory("link-up-legacy-state-");
+        try {
+            String jobId = "job-legacy-state-1";
+            String legacyJson =
+                    "{\n"
+                            + "  \"formatVersion\": 3,\n"
+                            + "  \"jobId\": \"" + jobId + "\",\n"
+                            + "  \"jobName\": \"legacy-state\",\n"
+                            + "  \"status\": \"FAILED\",\n"
+                            + "  \"createTimeMillis\": 1,\n"
+                            + "  \"startTimeMillis\": 2,\n"
+                            + "  \"endTimeMillis\": 3,\n"
+                            + "  \"metadata\": {\n"
+                            + "    \"externalExecutionId\": \"legacy-external\",\n"
+                            + "    \"idempotencyKey\": \"legacy-key\",\n"
+                            + "    \"definitionVersion\": 1,\n"
+                            + "    \"configDigest\": \"legacy-digest\",\n"
+                            + "    \"submittedTimeMillis\": 1,\n"
+                            + "    \"queuedTimeMillis\": 1,\n"
+                            + "    \"stateVersion\": 5,\n"
+                            + "    \"checkpointVersion\": 7,\n"
+                            + "    \"cancellationRequested\": false,\n"
+                            + "    \"transitions\": [],\n"
+                            + "    \"attempts\": []\n"
+                            + "  }\n"
+                            + "}";
+
+            Files.write(
+                    stateFile(directory, jobId),
+                    legacyJson.getBytes(StandardCharsets.UTF_8));
+
+            FileJobRepository repository =
+                    new FileJobRepository(directory, 20);
+
+            assertNotNull(repository.get(jobId));
+            assertEquals(
+                    7L,
+                    repository.getMetadata(jobId).getStateRevision());
+        } finally {
+            deleteDirectory(directory);
+        }
+    }
+
+    private static String readStateFile(
+            Path directory,
+            String jobId)
+            throws Exception {
+        return new String(
+                Files.readAllBytes(stateFile(directory, jobId)),
+                StandardCharsets.UTF_8);
+    }
+
+    private static Path stateFile(
+            Path directory,
+            String jobId) {
+        String encoded = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(
+                        jobId.getBytes(StandardCharsets.UTF_8));
+        return directory.resolve(encoded + ".job.json");
     }
 
     private static JobSubmission submission() {

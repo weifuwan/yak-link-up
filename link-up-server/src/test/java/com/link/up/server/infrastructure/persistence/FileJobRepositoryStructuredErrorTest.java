@@ -112,8 +112,14 @@ public class FileJobRepositoryStructuredErrorTest {
                             firstRegularFile(directory)
                                     .toFile());
             assertEquals(
-                    3,
+                    4,
                     persisted.get("formatVersion").asInt());
+            assertTrue(
+                    persisted.path("metadata")
+                            .has("stateRevision"));
+            assertFalse(
+                    persisted.path("metadata")
+                            .has("checkpointVersion"));
             assertEquals(
                     "PLAN-005",
                     persisted.path("metadata")
@@ -140,7 +146,7 @@ public class FileJobRepositoryStructuredErrorTest {
                     .findFirst()
                     .orElseThrow(
                             () -> new AssertionError(
-                                    "Expected persisted checkpoint file"));
+                                    "Expected persisted Worker state file"));
         }
     }
 

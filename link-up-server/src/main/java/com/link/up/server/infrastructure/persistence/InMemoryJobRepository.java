@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
 
-/** Bounded in-memory checkpoint/history adapter used by tests and embeddings. */
+/** Bounded in-memory Worker state/history adapter used by tests and embeddings. */
 public final class InMemoryJobRepository
         implements JobRepository {
 
@@ -107,8 +107,8 @@ public final class InMemoryJobRepository
             JobExecutionMetadata candidate) {
         return current != null
                 && candidate != null
-                && candidate.getCheckpointVersion()
-                < current.getCheckpointVersion();
+                && candidate.getStateRevision()
+                < current.getStateRevision();
     }
 
     private void trimTerminalHistory() {

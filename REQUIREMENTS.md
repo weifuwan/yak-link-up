@@ -2,7 +2,7 @@
 
 ## 产品定位
 
-Link-Up 是离线批量数据同步引擎，不是通用分布式计算平台。
+Link-Up 是离线批量数据同步引擎，不是流处理引擎，也不是通用分布式计算平台。
 
 当前优先级：**可靠、清楚、可扩展**，高于“功能看起来很多”。
 
@@ -15,10 +15,25 @@ Link-Up 是离线批量数据同步引擎，不是通用分布式计算平台。
 - Source/Sink/Pipeline 并行度。
 - 任务取消、日志、Metrics、Pipeline/Task 查询。
 - Worker 幂等提交和 externalExecutionId 查询。
-- Worker checkpoint 持久化和重启 LOST 恢复。
+- Worker 状态持久化和重启 LOST 恢复。
 - Job / Attempt 历史。
 - 基于 commit evidence 的安全手动 Retry。
 - Connector Schema / preflight 能力。
+
+## Worker State Persistence
+
+Worker 状态持久化只保存控制面事实：Job 状态、Attempt、取消意图、日志身份、错误与 Commit Evidence。
+
+```text
+Worker State Persistence
+!= Data Checkpoint
+!= Resume Point
+!= Savepoint
+```
+
+`stateRevision` 是 Worker 状态文件的单调修订号，用于阻止旧状态覆盖新状态，并作为 Runtime Event 的单 Job 顺序来源。
+
+Worker 重启时，遗留非终态 Job 统一转为 `LOST`。Link-Up 不从某个 Split、offset 或 batch 自动继续执行。
 
 ## Retry 要求
 
@@ -34,6 +49,7 @@ Retry 必须满足：
 
 当前不做：
 
+- 实时同步 / CDC runtime；
 - 分布式 Scheduler / ResourceManager；
 - Flink 式 checkpoint/savepoint；
 - 从某个 Split offset 自动 resume；
@@ -49,7 +65,7 @@ Retry 必须满足：
 - Maven 3.8.1+。
 - Connector 不依赖 framework。
 - JobGraph 等计划模型不可持有运行时资源。
-- checkpoint 写入使用单调版本和原子替换。
+- Worker state 写入使用单调 `stateRevision`、fsync 和原子替换。
 - 日志不得输出密码、Token、完整 Connector options。
 - 关键状态行为必须有单元测试或边界测试。
 

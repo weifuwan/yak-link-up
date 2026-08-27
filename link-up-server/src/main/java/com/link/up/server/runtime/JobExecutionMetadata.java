@@ -23,7 +23,7 @@ public final class JobExecutionMetadata {
     private final long submittedTimeMillis;
     private final long queuedTimeMillis;
     private final long stateVersion;
-    private final long checkpointVersion;
+    private final long stateRevision;
     private final boolean cancellationRequested;
     private final List<JobStateTransition> transitions;
     private final Map<String, TableDdl> tableDdlsByPipelineId;
@@ -124,7 +124,7 @@ public final class JobExecutionMetadata {
             long submittedTimeMillis,
             long queuedTimeMillis,
             long stateVersion,
-            long checkpointVersion,
+            long stateRevision,
             boolean cancellationRequested,
             List<JobStateTransition> transitions,
             Map<String, TableDdl> tableDdlsByPipelineId,
@@ -139,7 +139,7 @@ public final class JobExecutionMetadata {
         this.submittedTimeMillis = submittedTimeMillis;
         this.queuedTimeMillis = queuedTimeMillis;
         this.stateVersion = stateVersion;
-        this.checkpointVersion = checkpointVersion;
+        this.stateRevision = stateRevision;
         this.cancellationRequested = cancellationRequested;
         this.transitions = Collections.unmodifiableList(
                 new ArrayList<JobStateTransition>(transitions));
@@ -182,7 +182,7 @@ public final class JobExecutionMetadata {
                 state.getSubmittedTimeMillis(),
                 state.getQueuedTimeMillis(),
                 state.getStateVersion(),
-                state.getCheckpointVersion(),
+                state.getStateRevision(),
                 state.isCancellationRequested(),
                 state.getTransitions(),
                 tableDdls,
@@ -225,7 +225,7 @@ public final class JobExecutionMetadata {
                 submittedTimeMillis,
                 queuedTimeMillis,
                 stateVersion + 1L,
-                checkpointVersion + 1L,
+                stateRevision + 1L,
                 cancellationRequested,
                 recoveredTransitions,
                 tableDdlsByPipelineId,
@@ -241,7 +241,15 @@ public final class JobExecutionMetadata {
     public long getSubmittedTimeMillis() { return submittedTimeMillis; }
     public long getQueuedTimeMillis() { return queuedTimeMillis; }
     public long getStateVersion() { return stateVersion; }
-    public long getCheckpointVersion() { return checkpointVersion; }
+    public long getStateRevision() { return stateRevision; }
+
+    /**
+     * @deprecated Worker state persistence is not a data checkpoint. Use
+     * {@link #getStateRevision()}.
+     */
+    @Deprecated
+    public long getCheckpointVersion() { return stateRevision; }
+
     public boolean isCancellationRequested() { return cancellationRequested; }
     public List<JobStateTransition> getTransitions() { return transitions; }
     public Map<String, TableDdl> getTableDdlsByPipelineId() { return tableDdlsByPipelineId; }

@@ -17,11 +17,12 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * Durable Worker checkpoint repository backed by versioned per-job JSON files.
+ * Durable Worker state repository backed by versioned per-job JSON files.
  *
- * <p>The repository owns the in-memory index, checkpoint revision ordering and
+ * <p>The repository owns the in-memory index, state-revision ordering and
  * terminal-history retention. File naming, JSON IO and atomic replacement
- * belong to {@link JobStateFileStore}.</p>
+ * belong to {@link JobStateFileStore}. This state is control-plane metadata,
+ * not a data checkpoint or resume position.</p>
  */
 public final class FileJobRepository
         implements JobRepository {
@@ -128,7 +129,7 @@ public final class FileJobRepository
             fileStore.delete(jobId);
         } catch (IOException failure) {
             throw persistenceFailure(
-                    "Could not delete Worker checkpoint for "
+                    "Could not delete Worker state for "
                             + jobId,
                     failure);
         }
@@ -222,7 +223,7 @@ public final class FileJobRepository
             fileStore.write(record);
         } catch (IOException failure) {
             throw persistenceFailure(
-                    "Could not persist Worker checkpoint for "
+                    "Could not persist Worker state for "
                             + jobId,
                     failure);
         }
@@ -276,8 +277,8 @@ public final class FileJobRepository
 
         return current != null
                 && candidate != null
-                && candidate.getCheckpointVersion()
-                < current.getCheckpointVersion();
+                && candidate.getStateRevision()
+                < current.getStateRevision();
     }
 
     private static void sortNewestFirst(

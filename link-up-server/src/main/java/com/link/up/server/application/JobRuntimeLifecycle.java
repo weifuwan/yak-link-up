@@ -13,7 +13,8 @@ import com.link.up.server.runtime.ServerJobStatus;
 import java.util.Objects;
 
 /**
- * Applies runtime callbacks to domain state and persists lifecycle checkpoints.
+ * Applies runtime callbacks to domain state and persists Worker control-plane
+ * state. This persistence is not a data checkpoint or resume point.
  */
 final class JobRuntimeLifecycle {
 
@@ -47,7 +48,7 @@ final class JobRuntimeLifecycle {
         return JobExecutionMetadata.fromState(state);
     }
 
-    void checkpoint(JobExecutionState state) {
+    void persistState(JobExecutionState state) {
         repository.save(
                 snapshot(state),
                 metadata(state));
@@ -60,14 +61,14 @@ final class JobRuntimeLifecycle {
             @Override
             public void onQueued() {
                 state.markQueued();
-                checkpoint(state);
+                persistState(state);
             }
 
             @Override
             public boolean onStarting() {
                 boolean started = state.markRunning();
                 if (started) {
-                    checkpoint(state);
+                    persistState(state);
                 }
                 return started;
             }
@@ -80,7 +81,7 @@ final class JobRuntimeLifecycle {
                 state.bindLogIdentity(
                         runId,
                         jobLogFile);
-                checkpoint(state);
+                persistState(state);
             }
 
             @Override
@@ -124,9 +125,7 @@ final class JobRuntimeLifecycle {
         }
 
         state.failBeforeExecution(failure);
-        repository.save(
-                snapshot(state),
-                metadata(state));
+        persistState(state);
         activeJobs.remove(
                 state.getJobId(),
                 state);
@@ -150,9 +149,7 @@ final class JobRuntimeLifecycle {
             return;
         }
 
-        repository.save(
-                snapshot(state),
-                metadata(state));
+        persistState(state);
         activeJobs.remove(
                 state.getJobId(),
                 state);
