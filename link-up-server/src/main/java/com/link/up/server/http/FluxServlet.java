@@ -1,5 +1,6 @@
 package com.link.up.server.http;
 
+import javax.servlet.ServletException;
 import javax.servlet.ServletInputStream;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -202,7 +203,7 @@ public abstract class FluxServlet
     protected void doPost(
             HttpServletRequest request,
             HttpServletResponse response)
-            throws IOException {
+            throws IOException, ServletException {
         throw methodNotAllowed(request);
     }
 
