@@ -1,6 +1,7 @@
 package com.link.up.server.service;
 
 import com.link.up.server.application.JobApplication;
+import com.link.up.server.application.port.JobEventHistoryException;
 import com.link.up.server.application.port.JobEventReader;
 import com.link.up.server.dto.JobHistoryResponse;
 import com.link.up.server.runtime.JobExecutionMetadata;
@@ -90,8 +91,9 @@ public final class JobHistoryRestService {
 
             long next = page.getNextSequence();
             if (next <= cursor) {
-                throw new IllegalStateException(
-                        "Job event history cursor did not advance");
+                throw new JobEventHistoryException(
+                        "Job event history cursor did not advance",
+                        null);
             }
             cursor = next;
         }
