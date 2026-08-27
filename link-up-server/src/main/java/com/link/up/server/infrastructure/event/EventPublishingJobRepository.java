@@ -10,7 +10,6 @@ import com.link.up.server.runtime.JobSnapshot;
 import com.link.up.server.runtime.JobStateTransition;
 import com.link.up.server.runtime.ServerJobStatus;
 import com.link.up.server.runtime.event.JobEventEnvelope;
-import com.link.up.server.runtime.event.JobExecutionFacts;
 import com.link.up.server.runtime.event.JobRuntimeEvent;
 import com.link.up.server.runtime.event.JobRuntimeEventType;
 import org.apache.logging.log4j.LogManager;
@@ -25,7 +24,8 @@ import java.util.Objects;
  * state persistence succeeds.
  *
  * <p>The wrapped repository remains the state source of truth. Event delivery
- * is best-effort and listener failures are isolated at this boundary.</p>
+ * is best-effort and listener failures are isolated at this boundary. The
+ * journal intentionally contains Job/Attempt lifecycle facts only.</p>
  */
 public final class EventPublishingJobRepository
         implements JobRepository {
@@ -289,32 +289,28 @@ public final class EventPublishingJobRepository
                     JobRuntimeEventType.JOB_SUCCEEDED,
                     metadata,
                     status,
-                    null,
-                    snapshot);
+                    null);
         }
         if (status == ServerJobStatus.CANCELED) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_CANCELED,
                     metadata,
                     status,
-                    null,
-                    snapshot);
+                    null);
         }
         if (status == ServerJobStatus.LOST) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_LOST,
                     metadata,
                     status,
-                    attempt.getFailureType(),
-                    snapshot);
+                    attempt.getFailureType());
         }
         if (status == ServerJobStatus.FAILED) {
             return terminalEvent(
                     JobRuntimeEventType.JOB_FAILED,
                     metadata,
                     status,
-                    attempt.getFailureType(),
-                    snapshot);
+                    attempt.getFailureType());
         }
 
         return null;
@@ -345,8 +341,7 @@ public final class EventPublishingJobRepository
             JobRuntimeEventType type,
             JobExecutionMetadata metadata,
             ServerJobStatus fallbackStatus,
-            String failureType,
-            JobSnapshot snapshot) {
+            String failureType) {
 
         JobStateTransition transition =
                 latestTransition(metadata);
@@ -362,8 +357,7 @@ public final class EventPublishingJobRepository
                 transition == null
                         ? null
                         : transition.getReason(),
-                failureType,
-                JobExecutionFacts.from(snapshot));
+                failureType);
     }
 
     private long occurredAtMillis(

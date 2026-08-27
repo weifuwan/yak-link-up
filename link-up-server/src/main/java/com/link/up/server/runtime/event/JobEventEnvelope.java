@@ -6,11 +6,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
-/** Versioned, job-scoped envelope persisted as one JSON line. */
+/** Versioned, job-scoped lifecycle envelope persisted as one JSON line. */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class JobEventEnvelope {
 
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    /**
+     * v2 removes the terminal Pipeline/Task execution snapshot from new events.
+     * v1 remains readable; unknown legacy event payload fields are ignored.
+     */
+    public static final int CURRENT_SCHEMA_VERSION = 2;
 
     private final int schemaVersion;
     private final String eventId;

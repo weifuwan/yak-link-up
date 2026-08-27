@@ -8,34 +8,44 @@
 - [ ] framework 没有依赖具体 connector。
 - [ ] connector 没有 import `com.link.up.framework.*`。
 - [ ] domain 没有 Thread/Future/Semaphore/framework `JobExecution`。
-- [ ] HTTP 没有直接依赖 infrastructure。
 - [ ] Planner 没有创建线程、Reader、Channel、Split Queue。
-- [ ] 新类的角色能用一句话说清。
-- [ ] 没有新增与 `JobExecutionState` / `JobSnapshot` / `JobExecutionMetadata` 重复表达同一状态的平行模型。
+- [ ] 没有新增与现有 Job 状态重复的平行模型。
+- [ ] 新抽象直接服务离线同步当前需求，而不是为实时/分布式预留。
 
 ## Job / Attempt / Retry
 
 - [ ] 普通终态不会被普通状态转换复活。
 - [ ] Retry 创建新 Attempt，不覆盖旧 Attempt。
-- [ ] Retry 请求校验原 Job digest/版本/幂等标识。
 - [ ] LOST/CANCELED 默认不可 Retry。
-- [ ] 有 committed data 或 unknown state 时不可 Retry。
-- [ ] 缺少 commit evidence 时不可猜测安全。
-- [ ] `stateRevision` 单调递增，旧写入不能覆盖新 Worker state。
+- [ ] committed data / unknown state / 缺少 evidence 时不可猜测安全。
+- [ ] `stateRevision` 单调递增。
 
 ## Worker State
 
-- [ ] 新代码把 Worker state persistence 和数据 checkpoint/resume 明确区分。
-- [ ] Worker 重启后的非终态 Job 仍然转为 `LOST`，没有偷偷自动重放。
+- [ ] Worker state persistence 和数据 checkpoint/resume 明确区分。
+- [ ] Worker 重启后的非终态 Job 转 `LOST`，没有自动重放。
 - [ ] 没有新增 Split offset resume、savepoint、barrier 或跨 Worker failover。
-- [ ] 持久化格式升级能读取上一版本；legacy `checkpointVersion` 只用于兼容旧格式/协议。
+- [ ] 持久化格式升级能读取上一版本。
+
+## Runtime Event
+
+- [ ] Event 仍然只描述 `JOB_*` / Attempt 生命周期。
+- [ ] 没有新增 `TASK_*`、`SPLIT_*`、`BATCH_*` 事件。
+- [ ] Event JSON 没有复制 Pipeline/Task/Metrics 执行快照。
+- [ ] Event 不参与状态恢复、Retry 或 Commit 决策。
+- [ ] Event schema 变更有旧 JSONL 兼容测试。
+
+## Capability
+
+- [ ] Capability 来自有限离线枚举集合。
+- [ ] required 缺失才阻断，preferred 缺失只 Warning。
+- [ ] 拓扑派生能力直接并入 required，不建立 observed/undeclared-observed 模型。
+- [ ] 没有新增 Capability DSL、依赖图、fallback/cost/priority 系统。
 
 ## Connector
 
-- [ ] 新 Source 使用 `createEnumerator(...)`。
-- [ ] Split ID / dataSetId 合法且稳定。
-- [ ] Reader/Writer 自己拥有外部资源。
-- [ ] package 使用明确角色名。
+- [ ] Source/Sink 外部资源由 Reader/Writer 自己拥有。
+- [ ] Split ID / dataSetId 合法稳定。
 - [ ] 没有新增 `common/utils/helper/misc`。
 
 ## 安全
@@ -43,14 +53,13 @@
 - [ ] 日志没有密码、Token、完整 Connector options。
 - [ ] Worker state 没有持久化 JobSpec/密码/Token。
 - [ ] REST 错误没有直接暴露内部对象。
-- [ ] 文件路径由 Worker 自己生成，不接受任意路径读取。
 
 ## 兼容
 
-- [ ] REST 改动是 additive，或明确说明 breaking change。
-- [ ] 已有 connector identifier 不变。
-- [ ] JobSpec 字段语义不被偷偷改变。
-- [ ] 持久化格式升级能读取上一版本。
+- [ ] Breaking REST/API 变更明确写进 PR 描述。
+- [ ] 已有 Connector identifier 不变。
+- [ ] JobSpec 字段语义没有偷偷改变。
+- [ ] 老 Worker state / Event Journal 有必要的兼容读取测试。
 
 ## 验证
 
@@ -62,8 +71,5 @@ mvn --batch-mode clean verify
 
 - [ ] 新行为有测试。
 - [ ] 架构守卫仍通过。
-- [ ] 没有残留会误导为数据恢复点的新 `checkpoint` 命名。
-- [ ] 文档只描述当前实现，不写过期计划。
-- [ ] PR 描述清楚兼容性、非目标和未执行的验证。
-
-如果一项需要长篇解释才能勾上，通常说明代码边界还不够清楚。
+- [ ] 没有残留误导为实时/断点恢复的平台化预留。
+- [ ] 文档只描述当前实现。

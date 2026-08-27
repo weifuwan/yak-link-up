@@ -186,17 +186,9 @@ public final class LocalFluxEngine
             PreparedJob preparedJob = prepareSink(
                     definition,
                     preparedSource);
-            JobGraph jobGraph = plan(
+            return plan(
                     definition,
                     preparedJob);
-
-            CapabilityNegotiation physical =
-                    capabilityNegotiator.negotiate(
-                            definition,
-                            jobGraph);
-            capabilityNegotiator.requireSatisfied(physical);
-
-            return jobGraph;
 
         } catch (Exception failure) {
             LOG.error(

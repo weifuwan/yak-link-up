@@ -7,14 +7,18 @@ import com.link.up.framework.connector.ConnectorPreparer;
 import com.link.up.framework.connector.PreparedSource;
 import com.link.up.framework.job.JobCapabilityRequirements;
 import com.link.up.framework.job.JobDefinition;
-import com.link.up.framework.planner.JobGraph;
-import com.link.up.framework.planner.PipelineGraph;
 
 import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Set;
 
-/** Matches explicit and plan-derived requirements with Connector declarations. */
+/**
+ * Performs the small capability check required by the offline runtime.
+ *
+ * <p>Only explicit Job requirements and mandatory topology-derived
+ * requirements participate. The runtime does not maintain a second
+ * "observed capability" model or a generic capability rule engine.</p>
+ */
 public final class CapabilityNegotiator {
 
     private final ConnectorPreparer connectorPreparer;
@@ -30,7 +34,7 @@ public final class CapabilityNegotiator {
             JobDefinition definition) {
         return negotiate(
                 definition,
-                TopologyFacts.empty());
+                DerivedRequirements.empty());
     }
 
     public CapabilityNegotiation negotiate(
@@ -41,42 +45,14 @@ public final class CapabilityNegotiator {
                 preparedSource,
                 "preparedSource must not be null");
 
-        TopologyFacts facts = TopologyFacts.empty();
-        facts.sourceObserved.add(
-                ConnectorCapability.TABLE_SCHEMA_DISCOVERY);
+        DerivedRequirements derived =
+                DerivedRequirements.empty();
 
         if (source.getOutputTables().size() > 1) {
-            facts.requireMultiTable();
+            derived.requireMultiTable();
         }
 
-        return negotiate(definition, facts);
-    }
-
-    public CapabilityNegotiation negotiate(
-            JobDefinition definition,
-            JobGraph jobGraph) {
-
-        JobGraph graph = Objects.requireNonNull(
-                jobGraph,
-                "jobGraph must not be null");
-        TopologyFacts facts = TopologyFacts.empty();
-        facts.sourceObserved.add(
-                ConnectorCapability.TABLE_SCHEMA_DISCOVERY);
-
-        if (graph.getPipelineGraphs().size() > 1) {
-            facts.requireMultiTable();
-        }
-
-        for (PipelineGraph<?> pipeline :
-                graph.getPipelineGraphs()) {
-            if (pipeline.getSourceSplits().size() > 1) {
-                facts.sourceObserved.add(
-                        ConnectorCapability.PARTITION_SPLIT);
-                break;
-            }
-        }
-
-        return negotiate(definition, facts);
+        return negotiate(definition, derived);
     }
 
     public void requireSatisfied(
@@ -112,7 +88,7 @@ public final class CapabilityNegotiator {
 
     private CapabilityNegotiation negotiate(
             JobDefinition definition,
-            TopologyFacts facts) {
+            DerivedRequirements derived) {
 
         JobDefinition job = Objects.requireNonNull(
                 definition,
@@ -120,22 +96,24 @@ public final class CapabilityNegotiator {
         JobCapabilityRequirements requirements =
                 job.getCapabilityRequirements();
 
-        CapabilityNegotiation.Endpoint source = endpoint(
-                ConnectorRole.SOURCE,
-                job.getSource().getType(),
-                sourceCapabilities(job.getSource().getType()),
-                requirements.getSourceRequired(),
-                requirements.getSourcePreferred(),
-                facts.sourceDerivedRequired,
-                facts.sourceObserved);
-        CapabilityNegotiation.Endpoint sink = endpoint(
-                ConnectorRole.SINK,
-                job.getSink().getType(),
-                sinkCapabilities(job.getSink().getType()),
-                requirements.getSinkRequired(),
-                requirements.getSinkPreferred(),
-                facts.sinkDerivedRequired,
-                facts.sinkObserved);
+        CapabilityNegotiation.Endpoint source =
+                new CapabilityNegotiation.Endpoint(
+                        ConnectorRole.SOURCE,
+                        job.getSource().getType(),
+                        sourceCapabilities(
+                                job.getSource().getType()),
+                        requirements.getSourceRequired(),
+                        requirements.getSourcePreferred(),
+                        derived.sourceRequired);
+        CapabilityNegotiation.Endpoint sink =
+                new CapabilityNegotiation.Endpoint(
+                        ConnectorRole.SINK,
+                        job.getSink().getType(),
+                        sinkCapabilities(
+                                job.getSink().getType()),
+                        requirements.getSinkRequired(),
+                        requirements.getSinkPreferred(),
+                        derived.sinkRequired);
 
         return new CapabilityNegotiation(
                 source,
@@ -168,52 +146,21 @@ public final class CapabilityNegotiator {
         }
     }
 
-    private CapabilityNegotiation.Endpoint endpoint(
-            ConnectorRole role,
-            String connectorId,
-            Set<ConnectorCapability> supported,
-            Set<ConnectorCapability> required,
-            Set<ConnectorCapability> preferred,
-            Set<ConnectorCapability> derivedRequired,
-            Set<ConnectorCapability> observed) {
+    private static final class DerivedRequirements {
 
-        return new CapabilityNegotiation.Endpoint(
-                role,
-                connectorId,
-                supported,
-                required,
-                preferred,
-                derivedRequired,
-                observed);
-    }
-
-    private static final class TopologyFacts {
-
-        private final EnumSet<ConnectorCapability>
-                sourceDerivedRequired =
+        private final EnumSet<ConnectorCapability> sourceRequired =
                 EnumSet.noneOf(ConnectorCapability.class);
-        private final EnumSet<ConnectorCapability>
-                sinkDerivedRequired =
-                EnumSet.noneOf(ConnectorCapability.class);
-        private final EnumSet<ConnectorCapability>
-                sourceObserved =
-                EnumSet.noneOf(ConnectorCapability.class);
-        private final EnumSet<ConnectorCapability>
-                sinkObserved =
+        private final EnumSet<ConnectorCapability> sinkRequired =
                 EnumSet.noneOf(ConnectorCapability.class);
 
-        private static TopologyFacts empty() {
-            return new TopologyFacts();
+        private static DerivedRequirements empty() {
+            return new DerivedRequirements();
         }
 
         private void requireMultiTable() {
-            sourceDerivedRequired.add(
+            sourceRequired.add(
                     ConnectorCapability.MULTI_TABLE);
-            sinkDerivedRequired.add(
-                    ConnectorCapability.MULTI_TABLE);
-            sourceObserved.add(
-                    ConnectorCapability.MULTI_TABLE);
-            sinkObserved.add(
+            sinkRequired.add(
                     ConnectorCapability.MULTI_TABLE);
         }
     }
