@@ -5,6 +5,7 @@ import com.link.up.server.domain.JobAttemptStatus;
 import com.link.up.server.dto.JobHistoryResponse;
 import com.link.up.server.runtime.event.JobEventEnvelope;
 import com.link.up.server.runtime.event.JobEventPage;
+import com.link.up.server.runtime.event.JobExecutionFacts;
 import com.link.up.server.runtime.event.JobRuntimeEvent;
 import com.link.up.server.runtime.event.JobRuntimeEventType;
 import org.junit.Test;
@@ -13,6 +14,7 @@ import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class JobHistoryResponseTest {
@@ -38,14 +40,63 @@ public class JobHistoryResponseTest {
         assertEquals("job-history-1", response.getJobId());
         assertTrue(response.isCompleted());
         assertEquals(1, response.getAttempts().size());
-        assertEquals(1, response.getPipelines().size());
-        assertEquals(1, response.getPipelines().get(0).getTasks().size());
-        assertEquals(1, response.getPipelines().get(0).getChannels().size());
+        assertEquals(1,
+                response.getExecution().getPipelines().size());
+        assertEquals(1,
+                response.getExecution().getTasks().size());
         assertEquals("PLAN-006",
                 response.getAttempts().get(0).getErrorCode());
         assertTrue(json.contains("PLAN-006"));
         assertTrue(json.contains("pipeline-demo.orders"));
 
+        assertSecretSafe(json);
+    }
+
+    @Test
+    public void terminalExecutionFactsMustRoundTripThroughEventJson()
+            throws Exception {
+
+        JobRuntimeEvent terminal = JobRuntimeEvent.terminal(
+                JobRuntimeEventType.JOB_FAILED,
+                ServerJobStatus.RUNNING,
+                ServerJobStatus.FAILED,
+                "job-failed",
+                "SQLException",
+                JobExecutionFacts.from(snapshot()));
+        JobEventEnvelope envelope = JobEventEnvelope.create(
+                "job-history-1",
+                "job-history-1-attempt-1",
+                1,
+                5L,
+                5L,
+                terminal);
+
+        ObjectMapper mapper = new ObjectMapper();
+        String json = mapper.writeValueAsString(envelope);
+        JobEventEnvelope restored = mapper.readValue(
+                json,
+                JobEventEnvelope.class);
+
+        assertSecretSafe(json);
+        assertNotNull(restored.getEvent().getExecution());
+        assertEquals(1,
+                restored.getEvent()
+                        .getExecution()
+                        .getPipelines()
+                        .size());
+        assertEquals(1,
+                restored.getEvent()
+                        .getExecution()
+                        .getTasks()
+                        .size());
+        assertEquals(98L,
+                restored.getEvent()
+                        .getExecution()
+                        .getMetrics()
+                        .getSinkSuccessRecordCount());
+    }
+
+    private static void assertSecretSafe(String json) {
         assertFalse(json.contains(SECRET));
         assertFalse(json.contains("jdbc:mysql://"));
         assertFalse(json.contains("SELECT * FROM secret_table"));

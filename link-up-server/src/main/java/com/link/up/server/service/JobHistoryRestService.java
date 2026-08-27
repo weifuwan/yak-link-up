@@ -5,7 +5,9 @@ import com.link.up.server.application.port.JobEventReader;
 import com.link.up.server.dto.JobHistoryResponse;
 import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobSnapshot;
+import com.link.up.server.runtime.event.JobEventEnvelope;
 import com.link.up.server.runtime.event.JobEventPage;
+import com.link.up.server.runtime.event.JobExecutionFacts;
 
 import java.util.Objects;
 
@@ -46,10 +48,53 @@ public final class JobHistoryRestService {
                 afterSequence,
                 limit);
 
+        JobExecutionFacts execution =
+                JobExecutionFacts.from(snapshot);
+        if (!execution.hasExecutionDetails()) {
+            JobExecutionFacts retained =
+                    retainedExecution(normalizedJobId);
+            if (retained != null) {
+                execution = retained;
+            }
+        }
+
         return new JobHistoryResponse(
                 snapshot,
                 metadata,
-                events);
+                events,
+                execution);
+    }
+
+    private JobExecutionFacts retainedExecution(String jobId) {
+        long cursor = 0L;
+        JobExecutionFacts latest = null;
+
+        while (true) {
+            JobEventPage page = eventReader.read(
+                    jobId,
+                    cursor,
+                    MAX_PAGE_SIZE);
+
+            for (JobEventEnvelope envelope : page.getItems()) {
+                JobExecutionFacts execution =
+                        envelope.getEvent().getExecution();
+                if (execution != null
+                        && execution.hasExecutionDetails()) {
+                    latest = execution;
+                }
+            }
+
+            if (!page.isHasMore()) {
+                return latest;
+            }
+
+            long next = page.getNextSequence();
+            if (next <= cursor) {
+                throw new IllegalStateException(
+                        "Job event history cursor did not advance");
+            }
+            cursor = next;
+        }
     }
 
     private static void validatePage(
