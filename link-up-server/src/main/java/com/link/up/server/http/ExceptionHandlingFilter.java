@@ -1,5 +1,10 @@
 package com.link.up.server.http;
 
+import com.link.up.api.exception.FluxErrorCategory;
+import com.link.up.api.exception.FluxErrorCode;
+import com.link.up.api.exception.FluxErrorPhase;
+import com.link.up.api.exception.FluxRetryScope;
+import com.link.up.api.exception.FluxRuntimeException;
 import com.link.up.server.application.JobNotFoundException;
 import com.link.up.server.application.JobRetryNotAllowedException;
 import com.link.up.server.application.JobSubmissionConflictException;
@@ -16,6 +21,7 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.logging.Level;
@@ -25,10 +31,12 @@ import java.util.logging.Logger;
 public final class ExceptionHandlingFilter implements Filter {
 
     public static final String REQUEST_ID_ATTRIBUTE =
-            ExceptionHandlingFilter.class.getName() + ".requestId";
+            ExceptionHandlingFilter.class.getName()
+                    + ".requestId";
 
     private static final Logger LOG =
-            Logger.getLogger(ExceptionHandlingFilter.class.getName());
+            Logger.getLogger(
+                    ExceptionHandlingFilter.class.getName());
 
     public void init(FilterConfig filterConfig) {
     }
@@ -39,12 +47,18 @@ public final class ExceptionHandlingFilter implements Filter {
             FilterChain chain)
             throws IOException, ServletException {
 
-        HttpServletRequest request = (HttpServletRequest) servletRequest;
-        HttpServletResponse response = (HttpServletResponse) servletResponse;
+        HttpServletRequest request =
+                (HttpServletRequest) servletRequest;
+        HttpServletResponse response =
+                (HttpServletResponse) servletResponse;
         String requestId = requestId(request);
 
-        request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
-        response.setHeader("X-Request-Id", requestId);
+        request.setAttribute(
+                REQUEST_ID_ATTRIBUTE,
+                requestId);
+        response.setHeader(
+                "X-Request-Id",
+                requestId);
 
         try {
             chain.doFilter(request, response);
@@ -52,7 +66,10 @@ public final class ExceptionHandlingFilter implements Filter {
             Throwable failure = unwrap(exception);
 
             if (response.isCommitted()) {
-                LOG.log(Level.SEVERE, logMessage(request, requestId), failure);
+                LOG.log(
+                        Level.SEVERE,
+                        logMessage(request, requestId),
+                        failure);
                 throw exception instanceof ServletException
                         ? (ServletException) exception
                         : new ServletException(exception);
@@ -62,20 +79,31 @@ public final class ExceptionHandlingFilter implements Filter {
             response.resetBuffer();
             response.setStatus(mapping.httpStatus);
             response.setCharacterEncoding("UTF-8");
-            response.setContentType("application/json;charset=UTF-8");
-            response.setHeader("Cache-Control", "no-store");
+            response.setContentType(
+                    "application/json;charset=UTF-8");
+            response.setHeader(
+                    "Cache-Control",
+                    "no-store");
 
             JsonSupport.mapper().writeValue(
                     response.getOutputStream(),
                     new ErrorResponse(
                             mapping.code,
                             mapping.message,
-                            requestId));
+                            requestId,
+                            mapping.category,
+                            mapping.phase,
+                            mapping.retryable,
+                            mapping.retryScope,
+                            mapping.parameters));
 
             Level level = mapping.httpStatus >= 500
                     ? Level.SEVERE
                     : Level.WARNING;
-            LOG.log(level, logMessage(request, requestId), failure);
+            LOG.log(
+                    level,
+                    logMessage(request, requestId),
+                    failure);
         }
     }
 
@@ -84,7 +112,8 @@ public final class ExceptionHandlingFilter implements Filter {
 
     private static ErrorMapping map(Throwable failure) {
         if (failure instanceof RestException) {
-            RestException exception = (RestException) failure;
+            RestException exception =
+                    (RestException) failure;
             return new ErrorMapping(
                     exception.getHttpStatus(),
                     exception.getCode(),
@@ -120,6 +149,10 @@ public final class ExceptionHandlingFilter implements Filter {
                     "FLUX-JOB-EVENT-HISTORY-UNAVAILABLE",
                     "Job event history is unavailable");
         }
+        if (failure instanceof FluxRuntimeException) {
+            return structured(
+                    (FluxRuntimeException) failure);
+        }
         if (failure instanceof IllegalArgumentException) {
             return new ErrorMapping(
                     400,
@@ -144,6 +177,48 @@ public final class ExceptionHandlingFilter implements Filter {
                 "Internal server error");
     }
 
+    private static ErrorMapping structured(
+            FluxRuntimeException failure) {
+
+        FluxErrorCode errorCode =
+                failure.getFluxErrorCode();
+        FluxErrorCategory category =
+                errorCode.getCategory();
+
+        return new ErrorMapping(
+                httpStatus(
+                        category,
+                        errorCode.isRetryable()),
+                errorCode.getCode(),
+                errorCode.getDescription(),
+                category,
+                errorCode.getPhase(),
+                Boolean.valueOf(
+                        errorCode.isRetryable()),
+                errorCode.getRetryScope(),
+                failure.getParams());
+    }
+
+    private static int httpStatus(
+            FluxErrorCategory category,
+            boolean retryable) {
+
+        if (category == FluxErrorCategory.VALIDATION) {
+            return 400;
+        }
+        if (category == FluxErrorCategory.CAPABILITY
+                || category == FluxErrorCategory.PLANNING) {
+            return 422;
+        }
+        if (category == FluxErrorCategory.DISCOVERY
+                || category == FluxErrorCategory.PREPARATION) {
+            return retryable
+                    ? 503
+                    : 422;
+        }
+        return 500;
+    }
+
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
         while (current instanceof ServletException
@@ -153,8 +228,11 @@ public final class ExceptionHandlingFilter implements Filter {
         return current;
     }
 
-    private static String requestId(HttpServletRequest request) {
-        String provided = request.getHeader("X-Request-Id");
+    private static String requestId(
+            HttpServletRequest request) {
+
+        String provided =
+                request.getHeader("X-Request-Id");
         if (provided != null
                 && provided.length() <= 128
                 && provided.matches("[A-Za-z0-9._-]+")) {
@@ -173,24 +251,61 @@ public final class ExceptionHandlingFilter implements Filter {
     private static String logMessage(
             HttpServletRequest request,
             String requestId) {
+
         return "REST request failed"
-                + ", requestId=" + requestId
-                + ", method=" + request.getMethod()
-                + ", uri=" + request.getRequestURI();
+                + ", requestId="
+                + requestId
+                + ", method="
+                + request.getMethod()
+                + ", uri="
+                + request.getRequestURI();
     }
 
     private static final class ErrorMapping {
+
         private final int httpStatus;
         private final String code;
         private final String message;
+        private final FluxErrorCategory category;
+        private final FluxErrorPhase phase;
+        private final Boolean retryable;
+        private final FluxRetryScope retryScope;
+        private final Map<String, String> parameters;
 
         private ErrorMapping(
                 int httpStatus,
                 String code,
                 String message) {
+
+            this(
+                    httpStatus,
+                    code,
+                    message,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+
+        private ErrorMapping(
+                int httpStatus,
+                String code,
+                String message,
+                FluxErrorCategory category,
+                FluxErrorPhase phase,
+                Boolean retryable,
+                FluxRetryScope retryScope,
+                Map<String, String> parameters) {
+
             this.httpStatus = httpStatus;
             this.code = code;
             this.message = message;
+            this.category = category;
+            this.phase = phase;
+            this.retryable = retryable;
+            this.retryScope = retryScope;
+            this.parameters = parameters;
         }
     }
 }

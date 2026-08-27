@@ -35,7 +35,8 @@ public final class DorisSinkFactory implements SinkFactory {
         return Collections.unmodifiableSet(
                 EnumSet.of(
                         ConnectorCapability.AUTO_CREATE_TABLE,
-                        ConnectorCapability.UPSERT));
+                        ConnectorCapability.UPSERT,
+                        ConnectorCapability.TWO_PHASE_COMMIT));
     }
 
     @Override
@@ -64,11 +65,9 @@ public final class DorisSinkFactory implements SinkFactory {
                         DorisSinkOptions.DORIS_CONFIG,
                         DorisSinkOptions.CONNECT_TIMEOUT_MS,
                         DorisSinkOptions.SOCKET_TIMEOUT_MS,
-                        // 建表配置
                         DorisSinkOptions.SINK_CREATE_TABLE_DDL,
                         DorisSinkOptions.SINK_KEY_TYPE,
                         DorisSinkOptions.SINK_BUCKETS,
-                        // Stream Load 扩展参数
                         DorisSinkOptions.SINK_LOAD_TIMEOUT_SEC,
                         DorisSinkOptions.SINK_MAX_FILTER_RATIO,
                         DorisSinkOptions.SINK_COLUMNS,
@@ -96,7 +95,8 @@ public final class DorisSinkFactory implements SinkFactory {
 
     @Override
     public SinkPreparer createPreparer(ReadonlyConfig config) {
-        return new DorisSinkPreparer(DorisSinkConfig.of(config));
+        return new DorisSinkPreparer(
+                DorisSinkConfig.of(config));
     }
 
     @Override

@@ -2,27 +2,29 @@ package com.link.up.framework.job;
 
 import java.util.Objects;
 
-/**
- * 用户提交的同步任务定义。
- */
+/** User-submitted, normalized synchronization Job definition. */
 public final class JobDefinition {
 
     private final String name;
-
     private final SourceDefinition source;
-
     private final SinkDefinition sink;
-
     private final ExecutionConfig executionConfig;
-
     private final ColumnMapping columnMapping;
+    private final JobCapabilityRequirements capabilityRequirements;
 
     public JobDefinition(
             String name,
             SourceDefinition source,
             SinkDefinition sink,
             ExecutionConfig executionConfig) {
-        this(name, source, sink, executionConfig, ColumnMapping.empty());
+
+        this(
+                name,
+                source,
+                sink,
+                executionConfig,
+                ColumnMapping.empty(),
+                JobCapabilityRequirements.empty());
     }
 
     public JobDefinition(
@@ -32,27 +34,40 @@ public final class JobDefinition {
             ExecutionConfig executionConfig,
             ColumnMapping columnMapping) {
 
+        this(
+                name,
+                source,
+                sink,
+                executionConfig,
+                columnMapping,
+                JobCapabilityRequirements.empty());
+    }
+
+    public JobDefinition(
+            String name,
+            SourceDefinition source,
+            SinkDefinition sink,
+            ExecutionConfig executionConfig,
+            ColumnMapping columnMapping,
+            JobCapabilityRequirements capabilityRequirements) {
+
         this.name = requireName(name);
-
-        this.source =
-                Objects.requireNonNull(
-                        source,
-                        "source must not be null");
-
-        this.sink =
-                Objects.requireNonNull(
-                        sink,
-                        "sink must not be null");
-
-        this.executionConfig =
-                Objects.requireNonNull(
-                        executionConfig,
-                        "executionConfig must not be null");
-
-        this.columnMapping =
-                columnMapping == null
-                        ? ColumnMapping.empty()
-                        : columnMapping;
+        this.source = Objects.requireNonNull(
+                source,
+                "source must not be null");
+        this.sink = Objects.requireNonNull(
+                sink,
+                "sink must not be null");
+        this.executionConfig = Objects.requireNonNull(
+                executionConfig,
+                "executionConfig must not be null");
+        this.columnMapping = columnMapping == null
+                ? ColumnMapping.empty()
+                : columnMapping;
+        this.capabilityRequirements =
+                capabilityRequirements == null
+                        ? JobCapabilityRequirements.empty()
+                        : capabilityRequirements;
     }
 
     private static String requireName(String name) {
@@ -61,12 +76,10 @@ public final class JobDefinition {
                 "name must not be null");
 
         String normalized = name.trim();
-
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException(
                     "name must not be blank");
         }
-
         return normalized;
     }
 
@@ -88,5 +101,9 @@ public final class JobDefinition {
 
     public ColumnMapping getColumnMapping() {
         return columnMapping;
+    }
+
+    public JobCapabilityRequirements getCapabilityRequirements() {
+        return capabilityRequirements;
     }
 }
