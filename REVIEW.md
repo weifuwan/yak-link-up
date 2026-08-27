@@ -2,6 +2,35 @@
 
 提交 PR 前按这份清单过一遍。
 
+## 问题定位原则
+
+遇到运行问题时，先判断问题属于哪一层，再决定修改位置：
+
+```text
+这是 Connector 问题？
+还是 Executor 问题？
+还是 Planner 问题？
+还是 State 问题？
+还是 Business Config 问题？
+```
+
+典型边界：
+
+- `Connector`：外部系统协议、数据类型、SQL、分页、Split、写入语义。
+- `Executor`：并行执行、Channel、背压、线程、批处理、性能和资源使用。
+- `Planner`：Schema、字段映射、Split 规划、Capability、JobGraph。
+- `State`：Job / Attempt 生命周期、Cancel、Retry、Worker State Persistence。
+- `Business Config`：parallelism、batchSize、timeout、表配置、字段映射等用户配置。
+
+处理原则：
+
+- [ ] 优先在问题所属的最小边界内解决，不因为一个具体问题扩大公共抽象。
+- [ ] 一个问题如果可以通过 Connector 或业务配置解决，不先修改 Runtime。
+- [ ] 一个问题如果只存在于单个 Connector，不把复杂度提升到 Framework。
+- [ ] 只有多个真实场景反复出现同一种问题时，才考虑抽象成公共能力。
+
+**实战驱动优化，问题就地解决，重复出现再抽象。**
+
 ## 架构
 
 - [ ] `api` 没有依赖 framework/server/具体 connector。
