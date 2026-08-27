@@ -4,12 +4,14 @@ import com.link.up.server.application.JobApplication;
 import com.link.up.server.application.port.JobEventHistoryException;
 import com.link.up.server.application.port.JobEventReader;
 import com.link.up.server.dto.JobHistoryResponse;
+import com.link.up.server.runtime.JobAttemptMetadata;
 import com.link.up.server.runtime.JobExecutionMetadata;
 import com.link.up.server.runtime.JobSnapshot;
 import com.link.up.server.runtime.event.JobEventEnvelope;
 import com.link.up.server.runtime.event.JobEventPage;
 import com.link.up.server.runtime.event.JobExecutionFacts;
 
+import java.util.List;
 import java.util.Objects;
 
 /** Read-only composition boundary for Spark-style Job execution history. */
@@ -51,9 +53,14 @@ public final class JobHistoryRestService {
 
         JobExecutionFacts execution =
                 JobExecutionFacts.from(snapshot);
-        if (!execution.hasExecutionDetails()) {
-            JobExecutionFacts retained =
-                    retainedExecution(normalizedJobId);
+        String currentAttemptId = currentAttemptId(metadata);
+
+        if (!execution.hasExecutionDetails()
+                && snapshot.getStatus().isTerminal()
+                && currentAttemptId != null) {
+            JobExecutionFacts retained = retainedExecution(
+                    normalizedJobId,
+                    currentAttemptId);
             if (retained != null) {
                 execution = retained;
             }
@@ -66,7 +73,10 @@ public final class JobHistoryRestService {
                 execution);
     }
 
-    private JobExecutionFacts retainedExecution(String jobId) {
+    private JobExecutionFacts retainedExecution(
+            String jobId,
+            String attemptId) {
+
         long cursor = 0L;
         JobExecutionFacts latest = null;
 
@@ -77,6 +87,10 @@ public final class JobHistoryRestService {
                     MAX_PAGE_SIZE);
 
             for (JobEventEnvelope envelope : page.getItems()) {
+                if (!attemptId.equals(envelope.getAttemptId())) {
+                    continue;
+                }
+
                 JobExecutionFacts execution =
                         envelope.getEvent().getExecution();
                 if (execution != null
@@ -97,6 +111,21 @@ public final class JobHistoryRestService {
             }
             cursor = next;
         }
+    }
+
+    private static String currentAttemptId(
+            JobExecutionMetadata metadata) {
+
+        if (metadata == null) {
+            return null;
+        }
+
+        List<JobAttemptMetadata> attempts = metadata.getAttempts();
+        if (attempts.isEmpty()) {
+            return null;
+        }
+
+        return attempts.get(attempts.size() - 1).getAttemptId();
     }
 
     private static void validatePage(
