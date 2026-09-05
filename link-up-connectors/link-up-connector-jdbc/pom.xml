@@ -108,6 +108,11 @@
             <artifactId>HgdbJdbc</artifactId>
             <version>6.2.5</version>
         </dependency>
+        <dependency>
+            <groupId>com.intersystems</groupId>
+            <artifactId>intersystems-jdbc</artifactId>
+            <version>3.11.0</version>
+        </dependency>
     </dependencies>
 
 </project>
