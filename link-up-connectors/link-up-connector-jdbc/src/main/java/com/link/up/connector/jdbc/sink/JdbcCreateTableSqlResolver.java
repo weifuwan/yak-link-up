@@ -29,7 +29,9 @@ import com.link.up.connector.jdbc.core.dialect.sqlserver.SqlServerTypeMapper;
 
 import java.util.Locale;
 
-/** Generates the CREATE TABLE statement used for offline sink preparation. */
+/**
+ * Generates the CREATE TABLE statement used for offline sink preparation.
+ */
 final class JdbcCreateTableSqlResolver {
 
     private JdbcCreateTableSqlResolver() {
@@ -40,97 +42,246 @@ final class JdbcCreateTableSqlResolver {
             JdbcConnectionConfig connectionConfig,
             CatalogTable table) {
 
-        if (dialect == null || connectionConfig == null || table == null) {
+        if (dialect == null
+                || connectionConfig == null
+                || table == null) {
+
             return null;
         }
 
-        TablePath targetPath =
-                resolveTargetPath(connectionConfig, table.getTablePath());
-        if (targetPath == null) {
-            return null;
-        }
+        if (DatabaseIdentifier.MYSQL
+                .equalsIgnoreCase(
+                        dialect.name())) {
 
-        CatalogTable ddlTable =
-                table.getTablePath().equals(targetPath)
-                        ? table
-                        : table.withPath(targetPath);
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
 
-        if (DatabaseIdentifier.MYSQL.equalsIgnoreCase(dialect.name())) {
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new MySqlCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new MySqlTypeMapper(false))
+                    targetPath,
+                    ddlTable,
+                    new MySqlTypeMapper(false))
                     .build();
         }
 
-        if (DatabaseIdentifier.OCEANBASE.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.OCEANBASE
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             OceanBaseCompatibleMode mode =
                     OceanBaseCompatibleMode.from(
-                            connectionConfig.getCompatibleMode());
+                            connectionConfig
+                                    .getCompatibleMode());
 
             if (mode.isMySql()) {
                 return new MySqlCreateTableSqlBuilder(
-                                targetPath,
-                                ddlTable,
-                                new MySqlTypeMapper(false))
+                        targetPath,
+                        ddlTable,
+                        new MySqlTypeMapper(false))
                         .build();
             }
 
             return new OracleCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new OracleTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new OracleTypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.POSTGRESQL.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.POSTGRESQL
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new PostgresCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new PostgresTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new PostgresTypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.OPENGAUSS.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.OPENGAUSS
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new OpenGaussCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new OpenGaussTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new OpenGaussTypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.ORACLE.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.ORACLE
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new OracleCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new OracleTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new OracleTypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.SQLSERVER.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.SQLSERVER
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new SqlServerCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new SqlServerTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new SqlServerTypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.DB2.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.DB2
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new Db2CreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new Db2TypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new Db2TypeMapper())
                     .build();
         }
 
-        if (DatabaseIdentifier.DAMENG.equalsIgnoreCase(dialect.name())) {
+        if (DatabaseIdentifier.DAMENG
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
             return new DamengCreateTableSqlBuilder(
-                            targetPath,
-                            ddlTable,
-                            new DamengTypeMapper())
+                    targetPath,
+                    ddlTable,
+                    new DamengTypeMapper())
                     .build();
         }
 
+        /*
+         * Future JDBC dialects can add their CREATE TABLE builder here
+         * without changing the connector-neutral protocol.
+         */
         return null;
     }
 
@@ -138,14 +289,19 @@ final class JdbcCreateTableSqlResolver {
             JdbcConnectionConfig connectionConfig,
             TablePath tablePath) {
 
-        if (connectionConfig == null || tablePath == null) {
+        if (connectionConfig == null
+                || tablePath == null) {
+
             return tablePath;
         }
 
-        if (isOpenGauss(connectionConfig)) {
+        if (isOpenGauss(
+                connectionConfig)) {
+
             String database =
                     OpenGaussJdbcUrl.databaseName(
                             connectionConfig.getUrl());
+
             if (!hasText(database)) {
                 return null;
             }
@@ -155,6 +311,7 @@ final class JdbcCreateTableSqlResolver {
                             connectionConfig,
                             tablePath,
                             database);
+
             if (!hasText(schema)) {
                 return null;
             }
@@ -165,11 +322,14 @@ final class JdbcCreateTableSqlResolver {
                     tablePath.getTableName());
         }
 
-        if (isDameng(connectionConfig)) {
+        if (isDameng(
+                connectionConfig)) {
+
             String schema =
                     resolveDamengSchema(
                             connectionConfig,
                             tablePath);
+
             if (!hasText(schema)) {
                 return null;
             }
@@ -180,10 +340,13 @@ final class JdbcCreateTableSqlResolver {
                     tablePath.getTableName());
         }
 
-        if (isDb2(connectionConfig)) {
+        if (isDb2(
+                connectionConfig)) {
+
             String database =
                     Db2JdbcUrl.databaseName(
                             connectionConfig.getUrl());
+
             if (!hasText(database)) {
                 return null;
             }
@@ -193,6 +356,7 @@ final class JdbcCreateTableSqlResolver {
                             connectionConfig,
                             tablePath,
                             database);
+
             if (!hasText(schema)) {
                 return null;
             }
@@ -203,14 +367,17 @@ final class JdbcCreateTableSqlResolver {
                     tablePath.getTableName());
         }
 
-        if (isOceanBase(connectionConfig)) {
+        if (isOceanBase(
+                connectionConfig)) {
+
             String database =
                     OceanBaseJdbcUrl.databaseName(
                             connectionConfig.getUrl());
 
             OceanBaseCompatibleMode mode =
                     OceanBaseCompatibleMode.from(
-                            connectionConfig.getCompatibleMode());
+                            connectionConfig
+                                    .getCompatibleMode());
 
             if (mode.isOracle()) {
                 if (!hasText(database)) {
@@ -222,6 +389,7 @@ final class JdbcCreateTableSqlResolver {
                                 connectionConfig,
                                 tablePath,
                                 database);
+
                 if (!hasText(schema)) {
                     return null;
                 }
@@ -238,40 +406,60 @@ final class JdbcCreateTableSqlResolver {
                         tablePath.getTableName());
             }
 
-            if (hasText(tablePath.getDatabaseName())) {
+            if (hasText(
+                    tablePath.getDatabaseName())) {
+
                 return TablePath.of(
                         tablePath.getDatabaseName(),
                         tablePath.getTableName());
             }
 
-            if (hasText(connectionConfig.getSchema())) {
+            if (hasText(
+                    connectionConfig.getSchema())) {
+
                 return TablePath.of(
-                        connectionConfig.getSchema(),
+                        connectionConfig
+                                .getSchema(),
                         tablePath.getTableName());
             }
 
             return null;
         }
 
-        if (isSqlServer(connectionConfig)) {
+        if (isSqlServer(
+                connectionConfig)) {
+
             String database =
                     SqlServerJdbcUrl.databaseName(
                             connectionConfig.getUrl());
-            String pathDatabase = tablePath.getDatabaseName();
-            String pathSchema = tablePath.getSchemaName();
+
+            String pathDatabase =
+                    tablePath.getDatabaseName();
+
+            String pathSchema =
+                    tablePath.getSchemaName();
 
             String schema;
+
             if (!hasText(pathDatabase)) {
                 schema = hasText(pathSchema)
                         ? pathSchema.trim()
-                        : resolveSqlServerSchema(connectionConfig);
+                        : resolveSqlServerSchema(
+                                connectionConfig);
             } else if (hasText(database)
-                    && database.equalsIgnoreCase(pathDatabase)) {
+                    && database.equalsIgnoreCase(
+                            pathDatabase)) {
                 schema = hasText(pathSchema)
                         ? pathSchema.trim()
-                        : resolveSqlServerSchema(connectionConfig);
+                        : resolveSqlServerSchema(
+                                connectionConfig);
             } else {
-                schema = resolveSqlServerSchema(connectionConfig);
+                /*
+                 * Do not leak a MySQL/PostgreSQL/Oracle source database/schema
+                 * into an unqualified SQL Server target.
+                 */
+                schema = resolveSqlServerSchema(
+                        connectionConfig);
             }
 
             return hasText(database)
@@ -285,10 +473,13 @@ final class JdbcCreateTableSqlResolver {
                             tablePath.getTableName());
         }
 
-        if (isOracle(connectionConfig)) {
+        if (isOracle(
+                connectionConfig)) {
+
             String database =
                     OracleJdbcUrl.databaseName(
                             connectionConfig.getUrl());
+
             if (!hasText(database)) {
                 return null;
             }
@@ -298,6 +489,7 @@ final class JdbcCreateTableSqlResolver {
                             connectionConfig,
                             tablePath,
                             database);
+
             if (!hasText(schema)) {
                 return null;
             }
@@ -308,18 +500,25 @@ final class JdbcCreateTableSqlResolver {
                     tablePath.getTableName());
         }
 
-        if (isPostgres(connectionConfig)) {
+        if (isPostgres(
+                connectionConfig)) {
+
             String database =
                     databaseFromUrl(
                             connectionConfig.getUrl());
+
             if (!hasText(database)) {
                 return null;
             }
 
-            String schema = tablePath.getSchemaName();
+            String schema =
+                    tablePath.getSchemaName();
+
             if (!hasText(schema)) {
-                schema = connectionConfig.getSchema();
+                schema =
+                        connectionConfig.getSchema();
             }
+
             if (!hasText(schema)) {
                 schema = "public";
             }
@@ -330,14 +529,21 @@ final class JdbcCreateTableSqlResolver {
                     tablePath.getTableName());
         }
 
-        if (hasText(tablePath.getDatabaseName())) {
+        if (hasText(
+                tablePath.getDatabaseName())) {
+
             return tablePath;
         }
 
-        String database = connectionConfig.getSchema();
+        String database =
+                connectionConfig.getSchema();
+
         if (!hasText(database)) {
-            database = databaseFromUrl(connectionConfig.getUrl());
+            database =
+                    databaseFromUrl(
+                            connectionConfig.getUrl());
         }
+
         if (!hasText(database)) {
             return null;
         }
@@ -352,31 +558,44 @@ final class JdbcCreateTableSqlResolver {
             TablePath tablePath,
             String currentDatabase) {
 
-        String pathSchema = tablePath.getSchemaName();
-        String pathDatabase = tablePath.getDatabaseName();
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
 
         if (hasText(pathSchema)
                 && (!hasText(pathDatabase)
-                        || currentDatabase.equalsIgnoreCase(pathDatabase))) {
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
             return pathSchema.trim();
         }
 
-        if (hasText(config.getSchema())) {
-            return config.getSchema().trim();
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
         }
 
         String currentSchema =
                 OpenGaussJdbcUrl.currentSchema(
                         config.getUrl(),
                         config.getProperties());
+
         if (hasText(currentSchema)) {
             return currentSchema.trim();
         }
 
-        if (hasText(config.getUsername())) {
+        if (hasText(
+                config.getUsername())) {
+
             return config.getUsername()
                     .trim()
-                    .toLowerCase(Locale.ROOT);
+                    .toLowerCase(
+                            Locale.ROOT);
         }
 
         return "public";
@@ -386,29 +605,47 @@ final class JdbcCreateTableSqlResolver {
             JdbcConnectionConfig config,
             TablePath tablePath) {
 
-        String pathSchema = tablePath.getSchemaName();
-        String pathDatabase = tablePath.getDatabaseName();
+        String pathSchema =
+                tablePath.getSchemaName();
 
-        if (hasText(pathSchema) && !hasText(pathDatabase)) {
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        /*
+         * schema.table parsed from an explicit target mapping is safe to
+         * preserve. A three-part source path cannot be verified without a DM
+         * connection, so prefer target connection settings to avoid leaking
+         * source database/schema metadata into the target.
+         */
+        if (hasText(pathSchema)
+                && !hasText(pathDatabase)) {
+
             return pathSchema.trim();
         }
 
-        if (hasText(config.getSchema())) {
-            return config.getSchema().trim();
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
         }
 
         String currentSchema =
                 DamengJdbcUrl.schema(
                         config.getUrl(),
                         config.getProperties());
+
         if (hasText(currentSchema)) {
             return currentSchema.trim();
         }
 
-        if (hasText(config.getUsername())) {
+        if (hasText(
+                config.getUsername())) {
+
             return config.getUsername()
                     .trim()
-                    .toUpperCase(Locale.ROOT);
+                    .toUpperCase(
+                            Locale.ROOT);
         }
 
         return hasText(pathSchema)
@@ -421,31 +658,44 @@ final class JdbcCreateTableSqlResolver {
             TablePath tablePath,
             String currentDatabase) {
 
-        String pathSchema = tablePath.getSchemaName();
-        String pathDatabase = tablePath.getDatabaseName();
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
 
         if (hasText(pathSchema)
                 && (!hasText(pathDatabase)
-                        || currentDatabase.equalsIgnoreCase(pathDatabase))) {
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
             return pathSchema.trim();
         }
 
-        if (hasText(config.getSchema())) {
-            return config.getSchema().trim();
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
         }
 
         String currentSchema =
                 Db2JdbcUrl.currentSchema(
                         config.getUrl(),
                         config.getProperties());
+
         if (hasText(currentSchema)) {
             return currentSchema.trim();
         }
 
-        if (hasText(config.getUsername())) {
+        if (hasText(
+                config.getUsername())) {
+
             return config.getUsername()
                     .trim()
-                    .toUpperCase(Locale.ROOT);
+                    .toUpperCase(
+                            Locale.ROOT);
         }
 
         return null;
@@ -454,7 +704,8 @@ final class JdbcCreateTableSqlResolver {
     private static String resolveSqlServerSchema(
             JdbcConnectionConfig config) {
 
-        return hasText(config.getSchema())
+        return hasText(
+                config.getSchema())
                 ? config.getSchema().trim()
                 : "dbo";
     }
@@ -464,23 +715,40 @@ final class JdbcCreateTableSqlResolver {
             TablePath tablePath,
             String currentDatabase) {
 
-        String pathSchema = tablePath.getSchemaName();
-        String pathDatabase = tablePath.getDatabaseName();
+        String pathSchema =
+                tablePath.getSchemaName();
 
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        /*
+         * A schema with no database is a target schema.table parsed by the
+         * Oracle dialect. Preserve it. Also preserve a three-part target path
+         * when its logical database matches this Oracle service.
+         */
         if (hasText(pathSchema)
                 && (!hasText(pathDatabase)
-                        || currentDatabase.equalsIgnoreCase(pathDatabase))) {
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
             return pathSchema.trim();
         }
 
-        if (hasText(config.getSchema())) {
-            return config.getSchema().trim();
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
         }
 
-        if (hasText(config.getUsername())) {
+        if (hasText(
+                config.getUsername())) {
+
             return config.getUsername()
                     .trim()
-                    .toUpperCase(Locale.ROOT);
+                    .toUpperCase(
+                            Locale.ROOT);
         }
 
         return hasText(pathSchema)
@@ -492,100 +760,178 @@ final class JdbcCreateTableSqlResolver {
             JdbcConnectionConfig config) {
 
         if (DatabaseIdentifier.OPENGAUSS
-                .equalsIgnoreCase(config.getDialect())) {
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
             return true;
         }
 
-        return OpenGaussJdbcUrl.accepts(config.getUrl());
+        return OpenGaussJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isPostgres(
             JdbcConnectionConfig config) {
 
         if (DatabaseIdentifier.POSTGRESQL
-                .equalsIgnoreCase(config.getDialect())) {
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
             return true;
         }
 
-        String url = config.getUrl();
+        String url =
+                config.getUrl();
+
         return url != null
                 && url.trim()
-                        .toLowerCase(Locale.ROOT)
-                        .startsWith("jdbc:postgresql:");
+                .toLowerCase()
+                .startsWith(
+                        "jdbc:postgresql:");
     }
 
     private static boolean isOceanBase(
             JdbcConnectionConfig config) {
 
-        return DatabaseIdentifier.OCEANBASE
-                        .equalsIgnoreCase(config.getDialect())
-                || OceanBaseJdbcUrl.accepts(config.getUrl());
+        if (DatabaseIdentifier.OCEANBASE
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return OceanBaseJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isOracle(
             JdbcConnectionConfig config) {
 
-        return DatabaseIdentifier.ORACLE
-                        .equalsIgnoreCase(config.getDialect())
-                || OracleJdbcUrl.accepts(config.getUrl());
+        if (DatabaseIdentifier.ORACLE
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return OracleJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isSqlServer(
             JdbcConnectionConfig config) {
 
-        return DatabaseIdentifier.SQLSERVER
-                        .equalsIgnoreCase(config.getDialect())
-                || SqlServerJdbcUrl.accepts(config.getUrl());
+        if (DatabaseIdentifier.SQLSERVER
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return SqlServerJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isDb2(
             JdbcConnectionConfig config) {
 
-        return DatabaseIdentifier.DB2
-                        .equalsIgnoreCase(config.getDialect())
-                || Db2JdbcUrl.accepts(config.getUrl());
+        if (DatabaseIdentifier.DB2
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return Db2JdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isDameng(
             JdbcConnectionConfig config) {
 
-        return DatabaseIdentifier.DAMENG
-                        .equalsIgnoreCase(config.getDialect())
-                || DamengJdbcUrl.accepts(config.getUrl());
+        if (DatabaseIdentifier.DAMENG
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return DamengJdbcUrl.accepts(
+                config.getUrl());
     }
 
-    private static String databaseFromUrl(String url) {
+    private static String databaseFromUrl(
+            String url) {
+
         if (!hasText(url)) {
             return null;
         }
 
-        String normalized = url.trim();
-        int protocolSeparator = normalized.indexOf("://");
+        String normalized =
+                url.trim();
+
+        int protocolSeparator =
+                normalized.indexOf(
+                        "://");
+
         if (protocolSeparator < 0) {
             return null;
         }
 
-        int databaseStart = normalized.indexOf('/', protocolSeparator + 3);
-        if (databaseStart < 0 || databaseStart == normalized.length() - 1) {
+        int databaseStart =
+                normalized.indexOf(
+                        '/',
+                        protocolSeparator + 3);
+
+        if (databaseStart < 0
+                || databaseStart
+                == normalized.length() - 1) {
+
             return null;
         }
 
-        int databaseEnd = normalized.length();
-        int queryStart = normalized.indexOf('?', databaseStart + 1);
+        int databaseEnd =
+                normalized.length();
+
+        int queryStart =
+                normalized.indexOf(
+                        '?',
+                        databaseStart + 1);
+
         if (queryStart >= 0) {
-            databaseEnd = queryStart;
+            databaseEnd =
+                    queryStart;
         }
 
-        int fragmentStart = normalized.indexOf('#', databaseStart + 1);
-        if (fragmentStart >= 0 && fragmentStart < databaseEnd) {
-            databaseEnd = fragmentStart;
+        int fragmentStart =
+                normalized.indexOf(
+                        '#',
+                        databaseStart + 1);
+
+        if (fragmentStart >= 0
+                && fragmentStart
+                < databaseEnd) {
+
+            databaseEnd =
+                    fragmentStart;
         }
 
-        String database = normalized.substring(databaseStart + 1, databaseEnd).trim();
-        return hasText(database) ? database : null;
+        String database =
+                normalized.substring(
+                        databaseStart + 1,
+                        databaseEnd)
+                        .trim();
+
+        return hasText(database)
+                ? database
+                : null;
     }
 
-    private static boolean hasText(String value) {
-        return value != null && !value.trim().isEmpty();
+    private static boolean hasText(
+            String value) {
+
+        return value != null
+                && !value.trim()
+                .isEmpty();
     }
 }
