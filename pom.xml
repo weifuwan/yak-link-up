@@ -34,6 +34,10 @@
         <log4j2.version>2.23.1</log4j2.version>
         <slf4j.version>2.0.13</slf4j.version>
         <jsqlparser.version>4.9</jsqlparser.version>
+        <okhttp.version>4.12.0</okhttp.version>
+        <jackson.version>2.15.4</jackson.version>
+        <starrocks.thrift.sdk.version>1.0.1</starrocks.thrift.sdk.version>
+        <arrow.version>5.0.0</arrow.version>
 
 
     </properties>

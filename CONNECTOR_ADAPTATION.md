@@ -33,6 +33,21 @@ Yak Link Up 优先复用已有执行模型，再增加数据库差异层。新�
    - CREATE TABLE。
    - 确认已有数据库方言没有回归。
 
+## Native OLAP Connector
+
+当数据库提供的原生批量协议明显不同于 JDBC 执行模型，并且这些协议是 Connector 正确性或性能语义的一部分时，可以使用独立 Connector，而不是把原生协议塞进 `link-up-connector-jdbc`。
+
+StarRocks 使用独立的 `link-up-connector-starrocks`：
+
+- Native Source 通过 FE `/_query_plan` 获取 opaque query plan 和 Tablet 路由。
+- Source Split 绑定 BE 与 Tablet 集合，Reader 通过 StarRocks Thrift Scanner 直接读取 BE。
+- BE 返回 Apache Arrow，Connector 在边界内转换为 `FluxRow`。
+- StarRocks Source 不依赖 JDBC / MySQL Driver，也不复用 JDBC Split Planner。
+- Stage 1 只处理 bounded full read；Schema 由任务显式声明，复杂类型在没有安全映射前明确失败。
+- Stage 2 的 Sink 使用 StarRocks Stream Load，并继续留在同一个独立 Connector 模块中，不回落到 JDBC batch insert。
+
+这种例外是协议边界，不是为数据库复制通用执行框架。Source 仍复用 Link-Up 的 `SourceSplitEnumerator`、动态 Split 分配、`SourceReader`、Channel、Metrics 和 Job 生命周期。
+
 ## 数据库差异不要强行抹平
 
 适配时保留真正影响正确性的差异。例如 PostgreSQL cursor fetch 需要事务；Oracle `DATE` 包含时分秒、UPSERT 使用 `MERGE`；SQL Server 使用 `database.schema.table`，`timestamp` 实际是 `rowversion`，`tinyint` 是 0~255，`datetimeoffset` 需要保留时区偏移。
