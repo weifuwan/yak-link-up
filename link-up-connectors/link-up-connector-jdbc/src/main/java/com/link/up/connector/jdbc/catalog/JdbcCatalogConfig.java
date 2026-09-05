@@ -1,12 +1,17 @@
 package com.link.up.connector.jdbc.catalog;
 
 import java.io.Serializable;
-import java.util.*;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
 
 /**
  * JDBC Catalog 连接配置。
  */
-public final class JdbcCatalogConfig implements Serializable {
+public final class JdbcCatalogConfig
+        implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
@@ -18,14 +23,9 @@ public final class JdbcCatalogConfig implements Serializable {
 
     /**
      * 是否按照字段范围缩小整数类型。
-     * <p>
-     * 例如：
-     * <p>
-     * tinyint  -> Byte
-     * smallint -> Short
-     * <p>
-     * 关闭后，tinyint/smallint 通常统一映射为 Integer，
-     * 可以减少不同数据库之间的类型兼容问题。
+     *
+     * <p>例如 tinyint -> Byte、smallint -> Short。
+     * 当前主要供 MySQL 类型映射使用。
      */
     private final boolean intTypeNarrowing;
 
@@ -37,40 +37,62 @@ public final class JdbcCatalogConfig implements Serializable {
             Map<String, String> properties,
             boolean intTypeNarrowing) {
 
-        this.url = requireText(url, "url");
-        this.username = normalize(username);
-        this.password = password;
-        this.driverClass = normalize(driverClass);
+        this.url =
+                requireText(
+                        url,
+                        "url");
+
+        this.username =
+                normalize(
+                        username);
+
+        this.password =
+                password;
+
+        this.driverClass =
+                normalize(
+                        driverClass);
 
         Map<String, String> safeProperties =
                 properties == null
                         ? Collections.emptyMap()
-                        : new LinkedHashMap<>(properties);
+                        : new LinkedHashMap<String, String>(
+                        properties);
 
         this.properties =
-                Collections.unmodifiableMap(safeProperties);
+                Collections.unmodifiableMap(
+                        safeProperties);
 
-        this.intTypeNarrowing = intTypeNarrowing;
+        this.intTypeNarrowing =
+                intTypeNarrowing;
     }
 
-    private static String normalize(String value) {
+    private static String normalize(
+            String value) {
+
         if (value == null) {
             return null;
         }
 
-        String normalized = value.trim();
-        return normalized.isEmpty() ? null : normalized;
+        String normalized =
+                value.trim();
+
+        return normalized.isEmpty()
+                ? null
+                : normalized;
     }
 
     private static String requireText(
             String value,
             String fieldName) {
 
-        String normalized = normalize(value);
+        String normalized =
+                normalize(value);
 
         if (normalized == null) {
             throw new IllegalArgumentException(
-                    fieldName + " must not be empty");
+                    fieldName
+                            + " must not be empty");
         }
 
         return normalized;
@@ -102,9 +124,12 @@ public final class JdbcCatalogConfig implements Serializable {
 
     /**
      * 构造 JDBC 连接属性。
+     *
+     * <p>数据库专属参数必须按 URL 方言隔离，不能污染其他 JDBC Driver。
      */
     public Properties toConnectionProperties() {
-        Properties result = new Properties();
+        Properties result =
+                new Properties();
 
         for (Map.Entry<String, String> entry :
                 properties.entrySet()) {
@@ -115,41 +140,62 @@ public final class JdbcCatalogConfig implements Serializable {
         }
 
         if (username != null) {
-            result.setProperty("user", username);
+            result.setProperty(
+                    "user",
+                    username);
         }
 
         if (password != null) {
-            result.setProperty("password", password);
+            result.setProperty(
+                    "password",
+                    password);
         }
 
         /*
-         * 禁止驱动把 tinyint(1) 自动转换为 Boolean，
+         * 禁止 MySQL Driver 把 tinyint(1) 自动转换为 Boolean，
          * 交由 Flux 类型映射层统一决定。
+         *
+         * 该参数不能传给 PostgreSQL 等其他 JDBC Driver。
          */
-        result.putIfAbsent(
-                "tinyInt1isBit",
-                "false");
+        if (url.startsWith(
+                "jdbc:mysql:")) {
+
+            result.putIfAbsent(
+                    "tinyInt1isBit",
+                    "false");
+        }
 
         return result;
     }
 
     @Override
-    public boolean equals(Object obj) {
+    public boolean equals(
+            Object obj) {
+
         if (this == obj) {
             return true;
         }
 
-        if (!(obj instanceof JdbcCatalogConfig)) {
+        if (!(obj
+                instanceof JdbcCatalogConfig)) {
+
             return false;
         }
 
         JdbcCatalogConfig that =
                 (JdbcCatalogConfig) obj;
 
-        return intTypeNarrowing == that.intTypeNarrowing
-                && Objects.equals(url, that.url)
-                && Objects.equals(username, that.username)
-                && Objects.equals(password, that.password)
+        return intTypeNarrowing
+                == that.intTypeNarrowing
+                && Objects.equals(
+                url,
+                that.url)
+                && Objects.equals(
+                username,
+                that.username)
+                && Objects.equals(
+                password,
+                that.password)
                 && Objects.equals(
                 driverClass,
                 that.driverClass)
