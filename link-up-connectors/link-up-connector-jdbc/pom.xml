@@ -93,6 +93,11 @@
             <artifactId>kingbase8</artifactId>
             <version>9.0.1.jre7</version>
         </dependency>
+        <dependency>
+            <groupId>com.yashandb</groupId>
+            <artifactId>yashandb-jdbc</artifactId>
+            <version>1.10.7</version>
+        </dependency>
     </dependencies>
 
 </project>

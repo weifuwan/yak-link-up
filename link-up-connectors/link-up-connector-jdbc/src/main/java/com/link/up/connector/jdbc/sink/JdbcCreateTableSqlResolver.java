@@ -11,6 +11,7 @@ import com.link.up.connector.jdbc.catalog.opengauss.OpenGaussCreateTableSqlBuild
 import com.link.up.connector.jdbc.catalog.oracle.OracleCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.postgres.PostgresCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.sqlserver.SqlServerCreateTableSqlBuilder;
+import com.link.up.connector.jdbc.catalog.yashandb.YashanDbCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
@@ -29,6 +30,8 @@ import com.link.up.connector.jdbc.core.dialect.oracle.OracleTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.postgres.PostgresTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.sqlserver.SqlServerJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.sqlserver.SqlServerTypeMapper;
+import com.link.up.connector.jdbc.core.dialect.yashandb.YashanDbJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.yashandb.YashanDbTypeMapper;
 
 import java.util.Locale;
 
@@ -200,6 +203,33 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.YASHANDB
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new YashanDbCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new YashanDbTypeMapper())
+                    .build();
+        }
+
         if (DatabaseIdentifier.ORACLE
                 .equalsIgnoreCase(
                         dialect.name())) {
@@ -323,6 +353,33 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isYashanDb(
+                connectionConfig)) {
+
+            String database =
+                    YashanDbJdbcUrl.databaseName(
+                            connectionConfig.getUrl());
+
+            if (!hasText(database)) {
+                return null;
+            }
+
+            String schema =
+                    resolveYashanDbSchema(
+                            connectionConfig,
+                            tablePath,
+                            database);
+
+            if (!hasText(schema)) {
+                return null;
+            }
+
+            return TablePath.of(
+                    database,
+                    schema,
+                    tablePath.getTableName());
         }
 
         if (isKingbase(
@@ -610,6 +667,47 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
+    private static String resolveYashanDbSchema(
+            JdbcConnectionConfig config,
+            TablePath tablePath,
+            String currentDatabase) {
+
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        if (hasText(pathSchema)
+                && (!hasText(pathDatabase)
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
+            return pathSchema.trim();
+        }
+
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
+        }
+
+        if (hasText(
+                config.getUsername())) {
+
+            return config.getUsername()
+                    .trim()
+                    .toUpperCase(
+                            Locale.ROOT);
+        }
+
+        return hasText(pathSchema)
+                ? pathSchema.trim()
+                : null;
+    }
+
     private static String resolveKingbaseSchema(
             JdbcConnectionConfig config,
             TablePath tablePath,
@@ -859,6 +957,20 @@ final class JdbcCreateTableSqlResolver {
         return hasText(pathSchema)
                 ? pathSchema.trim()
                 : null;
+    }
+
+    private static boolean isYashanDb(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.YASHANDB
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return YashanDbJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isKingbase(
