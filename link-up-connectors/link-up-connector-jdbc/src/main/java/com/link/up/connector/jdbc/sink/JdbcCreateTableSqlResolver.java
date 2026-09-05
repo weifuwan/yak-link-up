@@ -2,6 +2,7 @@ package com.link.up.connector.jdbc.sink;
 
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.connector.jdbc.catalog.dameng.DamengCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.db2.Db2CreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlTypeMapper;
@@ -11,6 +12,8 @@ import com.link.up.connector.jdbc.catalog.sqlserver.SqlServerCreateTableSqlBuild
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
+import com.link.up.connector.jdbc.core.dialect.dameng.DamengJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.dameng.DamengTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.db2.Db2JdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.db2.Db2TypeMapper;
 import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseCompatibleMode;
@@ -218,6 +221,33 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.DAMENG
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new DamengCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new DamengTypeMapper())
+                    .build();
+        }
+
         /*
          * Future JDBC dialects can add their CREATE TABLE builder here
          * without changing the connector-neutral protocol.
@@ -233,6 +263,24 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isDameng(
+                connectionConfig)) {
+
+            String schema =
+                    resolveDamengSchema(
+                            connectionConfig,
+                            tablePath);
+
+            if (!hasText(schema)) {
+                return null;
+            }
+
+            return TablePath.of(
+                    null,
+                    schema,
+                    tablePath.getTableName());
         }
 
         if (isDb2(
@@ -448,6 +496,58 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
+    private static String resolveDamengSchema(
+            JdbcConnectionConfig config,
+            TablePath tablePath) {
+
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        /*
+         * schema.table parsed from an explicit target mapping is safe to
+         * preserve. A three-part source path cannot be verified without a DM
+         * connection, so prefer target connection settings to avoid leaking
+         * source database/schema metadata into the target.
+         */
+        if (hasText(pathSchema)
+                && !hasText(pathDatabase)) {
+
+            return pathSchema.trim();
+        }
+
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
+        }
+
+        String currentSchema =
+                DamengJdbcUrl.schema(
+                        config.getUrl(),
+                        config.getProperties());
+
+        if (hasText(currentSchema)) {
+            return currentSchema.trim();
+        }
+
+        if (hasText(
+                config.getUsername())) {
+
+            return config.getUsername()
+                    .trim()
+                    .toUpperCase(
+                            Locale.ROOT);
+        }
+
+        return hasText(pathSchema)
+                ? pathSchema.trim()
+                : null;
+    }
+
     private static String resolveDb2Schema(
             JdbcConnectionConfig config,
             TablePath tablePath,
@@ -624,6 +724,20 @@ final class JdbcCreateTableSqlResolver {
         }
 
         return Db2JdbcUrl.accepts(
+                config.getUrl());
+    }
+
+    private static boolean isDameng(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.DAMENG
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return DamengJdbcUrl.accepts(
                 config.getUrl());
     }
 

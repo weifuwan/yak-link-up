@@ -112,7 +112,15 @@ final class JdbcSinkPreparer implements SinkPreparer {
 
     private CatalogTable resolveTargetTable(CatalogTable source) {
         String path = config.resolveTargetTablePath(source.getTablePath());
-        return path == null ? source : source.withPath(dialect.parseTablePath(path));
+        CatalogTable mapped = path == null
+                ? source
+                : source.withPath(dialect.parseTablePath(path));
+        TablePath targetPath = JdbcCreateTableSqlResolver.resolveTargetPath(
+                config.getConnectionConfig(),
+                mapped.getTablePath());
+        return targetPath == null || mapped.getTablePath().equals(targetPath)
+                ? mapped
+                : mapped.withPath(targetPath);
     }
 
     private List<String> resolvePrimaryKeys(CatalogTable table) {
