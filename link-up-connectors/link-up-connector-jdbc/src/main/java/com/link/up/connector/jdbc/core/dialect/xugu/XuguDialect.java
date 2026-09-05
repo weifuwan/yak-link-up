@@ -220,15 +220,28 @@ public final class XuguDialect implements JdbcDialect {
     @Override
     public Map<String, String> defaultConnectionProperties() {
         Map<String, String> result = new LinkedHashMap<String, String>();
-        // Connector-level schema is an explicit physical object name. Since all
-        // Xugu SQL is schema-qualified, do not reinterpret it as current_schema;
-        // doing so could apply compatibility-mode case folding twice.
         if (JdbcDialect.hasText(connectionConfig.getCompatibleMode())
                 && !JdbcDialect.hasText(
                 XuguJdbcUrl.compatibleMode(
                         connectionConfig.getUrl(),
                         connectionConfig.getProperties()))) {
             result.put("compatiblemode", connectionConfig.getCompatibleMode().trim());
+        }
+
+        // Source-generated SQL is schema-qualified, but custom SQL is user-owned
+        // and may legitimately use unqualified table names. Keep the actual Xugu
+        // session schema aligned with the connector-level schema in that case.
+        // Connector schema is an already-resolved physical identifier, so quote
+        // it before passing it through current_schema to avoid compatibility-mode
+        // case folding changing the intended object name.
+        if (JdbcDialect.hasText(connectionConfig.getSchema())
+                && !JdbcDialect.hasText(
+                XuguJdbcUrl.currentSchema(
+                        connectionConfig.getUrl(),
+                        connectionConfig.getProperties()))) {
+            result.put(
+                    "current_schema",
+                    quoteSessionIdentifier(connectionConfig.getSchema()));
         }
         return result;
     }
@@ -292,6 +305,11 @@ public final class XuguDialect implements JdbcDialect {
             result.put("compatiblemode", config.getCompatibleMode().trim());
         }
         return result;
+    }
+
+    private static String quoteSessionIdentifier(String identifier) {
+        String value = identifier.trim();
+        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     private static List<String> splitIdentifierPath(String path) {
