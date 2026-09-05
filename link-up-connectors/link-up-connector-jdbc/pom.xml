@@ -113,6 +113,11 @@
             <artifactId>intersystems-jdbc</artifactId>
             <version>3.11.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.xugudb</groupId>
+            <artifactId>xugu-jdbc</artifactId>
+            <version>12.3.8</version>
+        </dependency>
     </dependencies>
 
 </project>

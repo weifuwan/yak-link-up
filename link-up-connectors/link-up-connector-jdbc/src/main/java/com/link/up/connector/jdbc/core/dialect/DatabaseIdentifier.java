@@ -20,6 +20,7 @@ public final class DatabaseIdentifier {
     public static final String DUCKDB = "duckdb";
     public static final String HIGHGO = "highgo";
     public static final String IRIS = "iris";
+    public static final String XUGU = "xugu";
 
     private DatabaseIdentifier() {
     }

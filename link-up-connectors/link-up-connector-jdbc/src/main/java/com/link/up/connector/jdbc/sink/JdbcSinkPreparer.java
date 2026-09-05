@@ -129,6 +129,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return IrisSinkSupport.resolveTargetPath(
                     config.getConnectionConfig(), tablePath);
         }
+        if (XuguSinkSupport.accepts(config.getConnectionConfig())) {
+            return XuguSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
         return JdbcCreateTableSqlResolver.resolveTargetPath(
                 config.getConnectionConfig(), tablePath);
     }
@@ -144,6 +148,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
         }
         if (IrisSinkSupport.accepts(config.getConnectionConfig())) {
             return IrisSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(), table);
+        }
+        if (XuguSinkSupport.accepts(config.getConnectionConfig())) {
+            return XuguSinkSupport.resolveCreateTableSql(
                     config.getConnectionConfig(), table);
         }
         return JdbcCreateTableSqlResolver.resolve(
