@@ -56,18 +56,22 @@ public final class IrisCreateTableSqlBuilder {
             // IDENTITY, while still maintaining an automatic counter.
             parts.add("SERIAL");
         } else {
-            parts.add(typeMapper.toDatabaseType(column, preserveSourceType));
+            boolean preserve = preserveSourceType
+                    && shouldPreserveSourceType(column);
+            parts.add(typeMapper.toDatabaseType(column, preserve));
         }
 
-        if (hasText(column.getComment())) {
-            parts.add("%DESCRIPTION '" + literal(column.getComment()) + "'");
+        if (!column.isNullable()) {
+            parts.add("NOT NULL");
         }
-
-        parts.add(column.isNullable() ? "NULL" : "NOT NULL");
 
         if (!column.isAutoIncrement()
                 && column.getDefaultValue() != null) {
             parts.add("DEFAULT " + formatDefaultValue(column, preserveSourceType));
+        }
+
+        if (hasText(column.getComment())) {
+            parts.add("%DESCRIPTION '" + literal(column.getComment()) + "'");
         }
         return String.join(" ", parts);
     }
@@ -98,6 +102,28 @@ public final class IrisCreateTableSqlBuilder {
                 + " (\n    "
                 + String.join(",\n    ", definitions)
                 + "\n);";
+    }
+
+    private static boolean shouldPreserveSourceType(Column column) {
+        String sourceType = column.getSourceType();
+        if (!hasText(sourceType)) {
+            return true;
+        }
+        String normalized = sourceType.trim().toLowerCase(Locale.ROOT);
+        int parenthesis = normalized.indexOf('(');
+        String base = parenthesis >= 0
+                ? normalized.substring(0, parenthesis).trim()
+                : normalized;
+        boolean numericSource = "numeric".equals(base)
+                || "decimal".equals(base)
+                || "dec".equals(base)
+                || "money".equals(base)
+                || "smallmoney".equals(base);
+        // If IRIS metadata produced a numeric shape Flux cannot represent,
+        // IrisTypeMapper intentionally carries it as exact STRING. Recreating
+        // the same explicit type could reintroduce clamping, so use LONGVARCHAR.
+        return !(numericSource
+                && column.getDataType().getSqlType() == SqlType.STRING);
     }
 
     private static String buildPrimaryKey(PrimaryKey primaryKey) {
