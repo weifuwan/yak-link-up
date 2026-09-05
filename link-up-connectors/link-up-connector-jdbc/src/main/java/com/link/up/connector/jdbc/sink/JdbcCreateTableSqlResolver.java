@@ -2,6 +2,7 @@ package com.link.up.connector.jdbc.sink;
 
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.connector.jdbc.catalog.db2.Db2CreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlTypeMapper;
 import com.link.up.connector.jdbc.catalog.oracle.OracleCreateTableSqlBuilder;
@@ -10,6 +11,8 @@ import com.link.up.connector.jdbc.catalog.sqlserver.SqlServerCreateTableSqlBuild
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
+import com.link.up.connector.jdbc.core.dialect.db2.Db2JdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.db2.Db2TypeMapper;
 import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseCompatibleMode;
 import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.oracle.OracleJdbcUrl;
@@ -188,6 +191,33 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.DB2
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new Db2CreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new Db2TypeMapper())
+                    .build();
+        }
+
         /*
          * Future JDBC dialects can add their CREATE TABLE builder here
          * without changing the connector-neutral protocol.
@@ -203,6 +233,33 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isDb2(
+                connectionConfig)) {
+
+            String database =
+                    Db2JdbcUrl.databaseName(
+                            connectionConfig.getUrl());
+
+            if (!hasText(database)) {
+                return null;
+            }
+
+            String schema =
+                    resolveDb2Schema(
+                            connectionConfig,
+                            tablePath,
+                            database);
+
+            if (!hasText(schema)) {
+                return null;
+            }
+
+            return TablePath.of(
+                    database,
+                    schema,
+                    tablePath.getTableName());
         }
 
         if (isOceanBase(
@@ -391,6 +448,54 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
+    private static String resolveDb2Schema(
+            JdbcConnectionConfig config,
+            TablePath tablePath,
+            String currentDatabase) {
+
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        if (hasText(pathSchema)
+                && (!hasText(pathDatabase)
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
+            return pathSchema.trim();
+        }
+
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
+        }
+
+        String currentSchema =
+                Db2JdbcUrl.currentSchema(
+                        config.getUrl(),
+                        config.getProperties());
+
+        if (hasText(currentSchema)) {
+            return currentSchema.trim();
+        }
+
+        if (hasText(
+                config.getUsername())) {
+
+            return config.getUsername()
+                    .trim()
+                    .toUpperCase(
+                            Locale.ROOT);
+        }
+
+        return null;
+    }
+
     private static String resolveSqlServerSchema(
             JdbcConnectionConfig config) {
 
@@ -505,6 +610,20 @@ final class JdbcCreateTableSqlResolver {
         }
 
         return SqlServerJdbcUrl.accepts(
+                config.getUrl());
+    }
+
+    private static boolean isDb2(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.DB2
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return Db2JdbcUrl.accepts(
                 config.getUrl());
     }
 
