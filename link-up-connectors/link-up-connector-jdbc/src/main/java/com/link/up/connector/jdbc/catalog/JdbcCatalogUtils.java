@@ -197,7 +197,16 @@ public final class JdbcCatalogUtils {
              PreparedStatement statement =
                      connection.prepareStatement(query)) {
 
-            ResultSetMetaData metadata = statement.getMetaData();
+            ResultSetMetaData metadata = null;
+            try {
+                metadata = statement.getMetaData();
+            } catch (SQLException metadataError) {
+                log.debug(
+                        "PreparedStatement metadata is unavailable; falling back to ResultSet metadata, sql={}",
+                        abbreviate(query, 300),
+                        metadataError);
+            }
+
             if (metadata != null) {
                 return readFieldNames(metadata);
             }
