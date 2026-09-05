@@ -10,6 +10,8 @@ import com.link.up.connector.jdbc.catalog.sqlserver.SqlServerCreateTableSqlBuild
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
+import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseCompatibleMode;
+import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.oracle.OracleJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.oracle.OracleTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.postgres.PostgresTypeMapper;
@@ -62,6 +64,46 @@ final class JdbcCreateTableSqlResolver {
                     targetPath,
                     ddlTable,
                     new MySqlTypeMapper(false))
+                    .build();
+        }
+
+        if (DatabaseIdentifier.OCEANBASE
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            OceanBaseCompatibleMode mode =
+                    OceanBaseCompatibleMode.from(
+                            connectionConfig
+                                    .getCompatibleMode());
+
+            if (mode.isMySql()) {
+                return new MySqlCreateTableSqlBuilder(
+                        targetPath,
+                        ddlTable,
+                        new MySqlTypeMapper(false))
+                        .build();
+            }
+
+            return new OracleCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new OracleTypeMapper())
                     .build();
         }
 
@@ -161,6 +203,65 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isOceanBase(
+                connectionConfig)) {
+
+            String database =
+                    OceanBaseJdbcUrl.databaseName(
+                            connectionConfig.getUrl());
+
+            OceanBaseCompatibleMode mode =
+                    OceanBaseCompatibleMode.from(
+                            connectionConfig
+                                    .getCompatibleMode());
+
+            if (mode.isOracle()) {
+                if (!hasText(database)) {
+                    return null;
+                }
+
+                String schema =
+                        resolveOracleSchema(
+                                connectionConfig,
+                                tablePath,
+                                database);
+
+                if (!hasText(schema)) {
+                    return null;
+                }
+
+                return TablePath.of(
+                        database,
+                        schema,
+                        tablePath.getTableName());
+            }
+
+            if (hasText(database)) {
+                return TablePath.of(
+                        database,
+                        tablePath.getTableName());
+            }
+
+            if (hasText(
+                    tablePath.getDatabaseName())) {
+
+                return TablePath.of(
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+            }
+
+            if (hasText(
+                    connectionConfig.getSchema())) {
+
+                return TablePath.of(
+                        connectionConfig
+                                .getSchema(),
+                        tablePath.getTableName());
+            }
+
+            return null;
         }
 
         if (isSqlServer(
@@ -363,6 +464,20 @@ final class JdbcCreateTableSqlResolver {
                 .toLowerCase()
                 .startsWith(
                         "jdbc:postgresql:");
+    }
+
+    private static boolean isOceanBase(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.OCEANBASE
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return OceanBaseJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isOracle(

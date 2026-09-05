@@ -11,6 +11,7 @@ public final class DatabaseIdentifier {
     public static final String POSTGRESQL = "postgresql";
     public static final String ORACLE = "oracle";
     public static final String SQLSERVER = "sqlserver";
+    public static final String OCEANBASE = "oceanbase";
 
     private DatabaseIdentifier() {
     }
