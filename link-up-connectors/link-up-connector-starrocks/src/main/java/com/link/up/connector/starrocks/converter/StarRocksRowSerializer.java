@@ -17,7 +17,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,6 +26,7 @@ import java.util.Map;
 public final class StarRocksRowSerializer {
 
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
     private final StarRocksSinkConfig config;
     private final TableSchema schema;
@@ -137,7 +137,8 @@ public final class StarRocksRowSerializer {
                 builder.append("\\N");
                 continue;
             }
-            String text = csvText(value);
+            SqlType sqlType = schema.getColumn(i).getDataType().getSqlType();
+            String text = csvText(value, sqlType);
             if (text.contains(separator)
                     || text.contains(config.getRowDelimiter())
                     || text.indexOf('\n') >= 0
@@ -186,16 +187,19 @@ public final class StarRocksRowSerializer {
             case TIMESTAMP:
                 return timestampText(value);
             case BYTES:
-                return value instanceof byte[]
-                        ? Base64.getEncoder().encodeToString((byte[]) value)
-                        : String.valueOf(value);
+                throw new IllegalArgumentException(
+                        "StarRocks BINARY/VARBINARY Stream Load is not supported with JSON; "
+                                + "use load_format=CSV so bytes can be encoded as hexadecimal text");
             case STRING:
             case TIMESTAMP_TZ:
                 return String.valueOf(value);
             case ARRAY:
             case MAP:
-            case ROW:
                 return normalizeAny(value);
+            case ROW:
+                throw new IllegalArgumentException(
+                        "StarRocks ROW/STRUCT Sink values require explicit nested field metadata; "
+                                + "Stage 2 intentionally does not infer STRUCT fields from FluxRow values");
             case NULL:
                 return null;
             default:
@@ -215,7 +219,8 @@ public final class StarRocksRowSerializer {
             return timestampText(value);
         }
         if (value instanceof byte[]) {
-            return Base64.getEncoder().encodeToString((byte[]) value);
+            throw new IllegalArgumentException(
+                    "Nested binary values are not supported by the bounded StarRocks Stage 2 serializer");
         }
         if (value instanceof Map) {
             Map<?, ?> source = (Map<?, ?>) value;
@@ -244,9 +249,18 @@ public final class StarRocksRowSerializer {
         return value;
     }
 
-    private static String csvText(Object value) {
-        if (value instanceof byte[]) {
-            return Base64.getEncoder().encodeToString((byte[]) value);
+    private static String csvText(Object value, SqlType sqlType) {
+        if (sqlType == SqlType.BYTES) {
+            if (!(value instanceof byte[])) {
+                throw new IllegalArgumentException(
+                        "StarRocks BYTES Sink field must contain byte[] values");
+            }
+            return toHex((byte[]) value);
+        }
+        if (sqlType == SqlType.ROW) {
+            throw new IllegalArgumentException(
+                    "StarRocks ROW/STRUCT Sink values require explicit nested field metadata; "
+                            + "Stage 2 intentionally does not infer STRUCT fields from FluxRow values");
         }
         if (value instanceof LocalDateTime) {
             return timestampText(value);
@@ -262,6 +276,16 @@ public final class StarRocksRowSerializer {
             }
         }
         return String.valueOf(value);
+    }
+
+    private static String toHex(byte[] value) {
+        char[] chars = new char[value.length * 2];
+        for (int i = 0; i < value.length; i++) {
+            int unsigned = value[i] & 0xFF;
+            chars[i * 2] = HEX[unsigned >>> 4];
+            chars[i * 2 + 1] = HEX[unsigned & 0x0F];
+        }
+        return new String(chars);
     }
 
     private static String timestampText(Object value) {

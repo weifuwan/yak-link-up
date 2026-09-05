@@ -2,6 +2,7 @@ package com.link.up.connector.starrocks.config;
 
 import com.link.up.api.configuration.ReadonlyConfig;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -17,22 +18,53 @@ import java.util.regex.Pattern;
 public final class StarRocksSinkConfig {
 
     private static final long MAX_IN_MEMORY_PAYLOAD_BYTES = Integer.MAX_VALUE - 4096L;
-    private static final Pattern LABEL_PREFIX_PATTERN = Pattern.compile("[A-Za-z0-9_-]+_");
-    private static final Set<String> RESERVED_STREAM_LOAD_HEADERS;
+    private static final int MAX_LABEL_LENGTH = 128;
+    private static final int GENERATED_LABEL_SUFFIX_LENGTH = 32;
+    private static final int MAX_LABEL_PREFIX_LENGTH =
+            MAX_LABEL_LENGTH - GENERATED_LABEL_SUFFIX_LENGTH;
+    private static final int MAX_DELIMITER_BYTES = 50;
+    private static final Pattern LABEL_PREFIX_PATTERN =
+            Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+    private static final Set<String> CONNECTOR_OWNED_STREAM_LOAD_HEADERS;
+    private static final Set<String> UNSUPPORTED_STAGE2_STREAM_LOAD_HEADERS;
 
     static {
-        Set<String> reserved = new LinkedHashSet<String>();
-        reserved.add("authorization");
-        reserved.add("label");
-        reserved.add("format");
-        reserved.add("expect");
-        reserved.add("content-type");
-        reserved.add("strip_outer_array");
-        reserved.add("read_json_by_line");
-        reserved.add("column_separator");
-        reserved.add("row_delimiter");
-        reserved.add("columns");
-        RESERVED_STREAM_LOAD_HEADERS = Collections.unmodifiableSet(reserved);
+        Set<String> owned = new LinkedHashSet<String>();
+        owned.add("authorization");
+        owned.add("label");
+        owned.add("format");
+        owned.add("expect");
+        owned.add("content-type");
+        owned.add("strip_outer_array");
+        owned.add("read_json_by_line");
+        owned.add("column_separator");
+        owned.add("row_delimiter");
+        owned.add("columns");
+        owned.add("jsonpaths");
+        owned.add("json_root");
+        CONNECTOR_OWNED_STREAM_LOAD_HEADERS = Collections.unmodifiableSet(owned);
+
+        Set<String> unsupported = new LinkedHashSet<String>();
+        // Merge Commit makes StarRocks generate/own the label and therefore breaks this
+        // connector's per-flush label idempotency contract. It also introduces asynchronous
+        // merge semantics that are intentionally outside the bounded Stage 2 scope.
+        unsupported.add("enable_merge_commit");
+        unsupported.add("merge_commit_async");
+        unsupported.add("merge_commit_interval_ms");
+        unsupported.add("merge_commit_parallel");
+
+        // Stage 2 is full-row bounded loading. CDC/delete and partial-update semantics are
+        // intentionally deferred instead of being smuggled in through passthrough headers.
+        unsupported.add("partial_update");
+        unsupported.add("partial_update_mode");
+        unsupported.add("merge_condition");
+        unsupported.add("two_phase_commit");
+
+        // The connector currently sends an uncompressed in-memory payload. Advertising a
+        // compression algorithm without compressing the body would make StarRocks misread it.
+        unsupported.add("compression");
+        unsupported.add("content-encoding");
+        UNSUPPORTED_STAGE2_STREAM_LOAD_HEADERS = Collections.unmodifiableSet(unsupported);
     }
 
     private final List<String> nodeUrls;
@@ -219,27 +251,44 @@ public final class StarRocksSinkConfig {
 
     private static void validateStreamLoadParams(Map<String, String> params) {
         for (String key : params.keySet()) {
-            if (RESERVED_STREAM_LOAD_HEADERS.contains(key.toLowerCase(Locale.ROOT))) {
+            String normalized = key.toLowerCase(Locale.ROOT);
+            if (CONNECTOR_OWNED_STREAM_LOAD_HEADERS.contains(normalized)) {
                 throw new IllegalArgumentException(
                         "StarRocks Sink stream_load.params must not override connector-owned header: "
+                                + key);
+            }
+            if (UNSUPPORTED_STAGE2_STREAM_LOAD_HEADERS.contains(normalized)) {
+                throw new IllegalArgumentException(
+                        "StarRocks Sink Stage 2 does not support stream_load.params header: "
                                 + key);
             }
         }
     }
 
     private static String defaultLabelPrefix(String database, String table) {
-        return normalizeLabelPrefix("link_up_" + sanitizeLabelPart(database) + "_" + sanitizeLabelPart(table) + "_");
+        String base = "link_up_" + sanitizeLabelPart(database) + "_" + sanitizeLabelPart(table);
+        int maxBaseLength = MAX_LABEL_PREFIX_LENGTH - 1;
+        if (base.length() > maxBaseLength) {
+            base = base.substring(0, maxBaseLength);
+        }
+        return normalizeLabelPrefix(base);
     }
 
     private static String sanitizeLabelPart(String value) {
-        return value.replaceAll("[^A-Za-z0-9_-]", "_");
+        return value.replaceAll("[^A-Za-z0-9_]", "_");
     }
 
     private static String normalizeLabelPrefix(String value) {
         String prefix = value.endsWith("_") ? value : value + "_";
         if (!LABEL_PREFIX_PATTERN.matcher(prefix).matches()) {
             throw new IllegalArgumentException(
-                    "StarRocks Sink label_prefix may contain only letters, digits, '_' and '-'");
+                    "StarRocks Sink label_prefix must start with a letter or '_' and contain only letters, digits and '_'");
+        }
+        if (prefix.length() > MAX_LABEL_PREFIX_LENGTH) {
+            throw new IllegalArgumentException(
+                    "StarRocks Sink label_prefix is too long: generated Stream Load label must be <= "
+                            + MAX_LABEL_LENGTH
+                            + " characters");
         }
         return prefix;
     }
@@ -254,6 +303,10 @@ public final class StarRocksSinkConfig {
     private static String requireDelimiter(String value, String name) {
         if (value == null || value.isEmpty()) {
             throw new IllegalArgumentException("StarRocks Sink '" + name + "' must not be empty");
+        }
+        if (value.getBytes(StandardCharsets.UTF_8).length > MAX_DELIMITER_BYTES) {
+            throw new IllegalArgumentException(
+                    "StarRocks Sink '" + name + "' must be <= " + MAX_DELIMITER_BYTES + " bytes");
         }
         return value;
     }

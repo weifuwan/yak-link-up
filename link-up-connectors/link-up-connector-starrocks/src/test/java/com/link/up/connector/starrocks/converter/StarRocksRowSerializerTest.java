@@ -84,6 +84,32 @@ public class StarRocksRowSerializerTest {
         assertEquals("`id`,`name`,`note`", serializer.csvColumnsHeader());
     }
 
+    @Test
+    public void serializesBinaryAsHexForCsvStreamLoad() {
+        StarRocksSinkConfig config = config("CSV", "|");
+        TableSchema schema = TableSchema.builder()
+                .column(Column.builder("payload", BasicType.BYTES_TYPE).build())
+                .build();
+        StarRocksRowSerializer serializer = new StarRocksRowSerializer(config, schema);
+
+        String record = new String(
+                serializer.serializeRow(FluxRow.of(new byte[] {0x00, 0x0F, (byte) 0xFF})),
+                StandardCharsets.UTF_8);
+
+        assertEquals("000FFF", record);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void jsonRejectsBinaryBecauseStarRocksJsonLoadDoesNotSupportIt() {
+        StarRocksSinkConfig config = config("JSON", "\t");
+        TableSchema schema = TableSchema.builder()
+                .column(Column.builder("payload", BasicType.BYTES_TYPE).build())
+                .build();
+
+        new StarRocksRowSerializer(config, schema)
+                .serializeRow(FluxRow.of(new byte[] {0x01, 0x02}));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void csvFailsFastWhenValueContainsDelimiter() {
         StarRocksSinkConfig config = config("CSV", "|");
