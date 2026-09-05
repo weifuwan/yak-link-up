@@ -163,21 +163,26 @@ public final class XuguCatalog implements WritableCatalog {
         checkDatabase(database);
         checkOpened();
         String schema = schema(schemaName);
-        try (Connection connection = connection();
-             ResultSet rs = connection.getMetaData().getTables(
-                     null,
-                     schema,
-                     "%",
-                     new String[]{"TABLE"})) {
-            List<TablePath> tables = new ArrayList<TablePath>();
-            while (rs.next()) {
-                String table = normalize(rs.getString("TABLE_NAME"));
-                if (table != null) {
-                    tables.add(TablePath.of(databaseName, schema, table));
+        try (Connection connection = connection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+            String schemaPattern = exactMetadataPattern(meta, schema);
+            String tablePattern = metadataUsesLike() ? "%" : null;
+            try (ResultSet rs = meta.getTables(
+                    null,
+                    schemaPattern,
+                    tablePattern,
+                    new String[]{"TABLE"})) {
+                List<TablePath> tables = new ArrayList<TablePath>();
+                while (rs.next()) {
+                    String rowSchema = normalize(rs.getString("TABLE_SCHEM"));
+                    String table = normalize(rs.getString("TABLE_NAME"));
+                    if (table != null && schema.equals(rowSchema)) {
+                        tables.add(TablePath.of(databaseName, schema, table));
+                    }
                 }
+                tables.sort(Comparator.comparing(TablePath::getTableName));
+                return tables;
             }
-            tables.sort(Comparator.comparing(TablePath::getTableName));
-            return tables;
         } catch (SQLException e) {
             throw new CatalogException(
                     "获取 XuguDB 表列表失败，schema=" + schema, e);
@@ -188,13 +193,20 @@ public final class XuguCatalog implements WritableCatalog {
     public boolean tableExists(TablePath tablePath) throws CatalogException {
         checkOpened();
         TablePath path = normalizePath(tablePath);
-        try (Connection connection = connection();
-             ResultSet rs = connection.getMetaData().getTables(
-                     null,
-                     path.getSchemaName(),
-                     path.getTableName(),
-                     new String[]{"TABLE"})) {
-            return rs.next();
+        try (Connection connection = connection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+            try (ResultSet rs = meta.getTables(
+                    null,
+                    exactMetadataPattern(meta, path.getSchemaName()),
+                    exactMetadataPattern(meta, path.getTableName()),
+                    new String[]{"TABLE"})) {
+                while (rs.next()) {
+                    if (metadataRowMatches(rs, path)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
         } catch (SQLException e) {
             throw new CatalogException(
                     "检查 XuguDB 表是否存在失败，table=" + path, e);
@@ -339,14 +351,17 @@ public final class XuguCatalog implements WritableCatalog {
 
     private List<Column> columns(DatabaseMetaData meta, TablePath path)
             throws SQLException {
+        String columnPattern = metadataUsesLike() ? "%" : null;
         try (ResultSet rs = meta.getColumns(
                 null,
-                path.getSchemaName(),
-                path.getTableName(),
-                "%")) {
+                exactMetadataPattern(meta, path.getSchemaName()),
+                exactMetadataPattern(meta, path.getTableName()),
+                columnPattern)) {
             List<Column> columns = new ArrayList<Column>();
             while (rs.next()) {
-                columns.add(typeMapper.toColumn(rs));
+                if (metadataRowMatches(rs, path)) {
+                    columns.add(typeMapper.toColumn(rs));
+                }
             }
             return columns;
         }
@@ -385,10 +400,15 @@ public final class XuguCatalog implements WritableCatalog {
             throws SQLException {
         try (ResultSet rs = meta.getTables(
                 null,
-                path.getSchemaName(),
-                path.getTableName(),
+                exactMetadataPattern(meta, path.getSchemaName()),
+                exactMetadataPattern(meta, path.getTableName()),
                 new String[]{"TABLE"})) {
-            return rs.next() ? normalize(rs.getString("REMARKS")) : null;
+            while (rs.next()) {
+                if (metadataRowMatches(rs, path)) {
+                    return normalize(rs.getString("REMARKS"));
+                }
+            }
+            return null;
         }
     }
 
@@ -404,10 +424,15 @@ public final class XuguCatalog implements WritableCatalog {
     private TablePath normalizePath(TablePath tablePath) {
         Objects.requireNonNull(tablePath, "tablePath must not be null");
         String sourceDatabase = tablePath.getDatabaseName();
+        if (hasText(sourceDatabase)
+                && !databaseName.equalsIgnoreCase(sourceDatabase)) {
+            throw new IllegalArgumentException(
+                    "XuguDB JDBC job 只支持 URL 当前 database：" + databaseName
+                            + "，requested=" + sourceDatabase);
+        }
+
         String targetSchema = tablePath.getSchemaName();
-        if (!hasText(targetSchema)
-                || (hasText(sourceDatabase)
-                && !databaseName.equalsIgnoreCase(sourceDatabase))) {
+        if (!hasText(targetSchema)) {
             targetSchema = defaultSchema;
         }
         if (!hasText(targetSchema)) {
@@ -432,6 +457,39 @@ public final class XuguCatalog implements WritableCatalog {
                     "XuguDB JDBC job 只支持 URL 当前 database：" + databaseName
                             + "，requested=" + requested);
         }
+    }
+
+    private boolean metadataUsesLike() {
+        String configured = propertyIgnoreCase(
+                config.toConnectionProperties(), "useLike");
+        return !hasText(configured)
+                || Boolean.parseBoolean(configured.trim());
+    }
+
+    private String exactMetadataPattern(
+            DatabaseMetaData meta,
+            String value) throws SQLException {
+        if (!metadataUsesLike()) {
+            return value;
+        }
+        return escapeMetadataPattern(value, meta.getSearchStringEscape());
+    }
+
+    static String escapeMetadataPattern(String value, String escape) {
+        if (!hasText(value) || !hasText(escape)) {
+            return value;
+        }
+        String escaped = value.replace(escape, escape + escape);
+        escaped = escaped.replace("%", escape + "%");
+        return escaped.replace("_", escape + "_");
+    }
+
+    private static boolean metadataRowMatches(ResultSet rs, TablePath path)
+            throws SQLException {
+        String rowSchema = normalize(rs.getString("TABLE_SCHEM"));
+        String rowTable = normalize(rs.getString("TABLE_NAME"));
+        return Objects.equals(path.getSchemaName(), rowSchema)
+                && Objects.equals(path.getTableName(), rowTable);
     }
 
     private Connection connection() throws SQLException {
@@ -487,6 +545,19 @@ public final class XuguCatalog implements WritableCatalog {
             }
         }
         return false;
+    }
+
+    private static String propertyIgnoreCase(
+            Properties properties,
+            String key) {
+        for (Object propertyKey : properties.keySet()) {
+            if (propertyKey != null
+                    && key.equalsIgnoreCase(String.valueOf(propertyKey).trim())) {
+                Object value = properties.get(propertyKey);
+                return value == null ? null : String.valueOf(value);
+            }
+        }
+        return null;
     }
 
     private static String quoteTable(TablePath path) {
