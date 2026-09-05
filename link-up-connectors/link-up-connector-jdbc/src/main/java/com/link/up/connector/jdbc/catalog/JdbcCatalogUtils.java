@@ -9,12 +9,12 @@ import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.config.JdbcSourceConfig;
 import com.link.up.connector.jdbc.config.JdbcSourceTableConfig;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
+import com.link.up.connector.jdbc.internal.JdbcConnectionProvider;
 import com.link.up.connector.jdbc.options.MultiTableFailurePolicy;
 import com.link.up.connector.jdbc.source.JdbcSourceTable;
 import lombok.extern.slf4j.Slf4j;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -123,6 +123,7 @@ public final class JdbcCatalogUtils {
             catalogTable =
                     projectCatalogTableByQuery(
                             sourceConfig.getConnectionConfig(),
+                            dialect,
                             catalogTable,
                             tableConfig.getQuery());
         }
@@ -156,12 +157,13 @@ public final class JdbcCatalogUtils {
 
     private static CatalogTable projectCatalogTableByQuery(
             JdbcConnectionConfig connectionConfig,
+            JdbcDialect dialect,
             CatalogTable physicalTable,
             String query)
             throws Exception {
 
         validateQuery(query);
-        List<String> queryFields = readQueryFields(connectionConfig, query);
+        List<String> queryFields = readQueryFields(connectionConfig, dialect, query);
 
         if (queryFields.isEmpty()) {
             throw new IllegalArgumentException(
@@ -185,41 +187,43 @@ public final class JdbcCatalogUtils {
 
     private static List<String> readQueryFields(
             JdbcConnectionConfig config,
+            JdbcDialect dialect,
             String query)
             throws Exception {
 
-        loadDriver(config);
+        // Metadata discovery must use the same dialect-resolved connection
+        // properties as the runtime reader. Otherwise database-specific session
+        // settings (for example Xugu compatiblemode/current_schema) can differ
+        // between planning and execution.
+        try (JdbcConnectionProvider connectionProvider =
+                     new JdbcConnectionProvider(config, dialect)) {
+            Connection connection = connectionProvider.getOrEstablishConnection();
+            try (PreparedStatement statement = connection.prepareStatement(query)) {
 
-        try (Connection connection =
-                     DriverManager.getConnection(
-                             config.getUrl(),
-                             config.toProperties());
-             PreparedStatement statement =
-                     connection.prepareStatement(query)) {
+                ResultSetMetaData metadata = null;
+                try {
+                    metadata = statement.getMetaData();
+                } catch (SQLException metadataError) {
+                    log.debug(
+                            "PreparedStatement metadata is unavailable; falling back to ResultSet metadata, sql={}",
+                            abbreviate(query, 300),
+                            metadataError);
+                }
 
-            ResultSetMetaData metadata = null;
-            try {
-                metadata = statement.getMetaData();
-            } catch (SQLException metadataError) {
-                log.debug(
-                        "PreparedStatement metadata is unavailable; falling back to ResultSet metadata, sql={}",
-                        abbreviate(query, 300),
-                        metadataError);
-            }
+                if (metadata != null) {
+                    return readFieldNames(metadata);
+                }
 
-            if (metadata != null) {
-                return readFieldNames(metadata);
-            }
+                if (query.indexOf('?') >= 0) {
+                    throw new IllegalArgumentException(
+                            "Custom query contains parameter placeholders; catalog phase cannot discover result schema: "
+                                    + query);
+                }
 
-            if (query.indexOf('?') >= 0) {
-                throw new IllegalArgumentException(
-                        "Custom query contains parameter placeholders; catalog phase cannot discover result schema: "
-                                + query);
-            }
-
-            statement.setMaxRows(1);
-            try (ResultSet resultSet = statement.executeQuery()) {
-                return readFieldNames(resultSet.getMetaData());
+                statement.setMaxRows(1);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    return readFieldNames(resultSet.getMetaData());
+                }
             }
         } catch (SQLException e) {
             throw new CatalogException(
@@ -271,16 +275,6 @@ public final class JdbcCatalogUtils {
                 && !lower.startsWith("with\t")) {
             throw new IllegalArgumentException(
                     "JDBC Source query only allows SELECT or WITH statements");
-        }
-    }
-
-    private static void loadDriver(
-            JdbcConnectionConfig config)
-            throws ClassNotFoundException {
-
-        String driverName = config.getDriverName();
-        if (hasText(driverName)) {
-            Class.forName(driverName);
         }
     }
 
