@@ -7,7 +7,6 @@ import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 
 import java.io.ByteArrayInputStream;
 import java.io.StringReader;
-import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -39,18 +38,21 @@ public final class IrisJdbcRowConverter extends AbstractJdbcRowConverter {
             statement.setNull(index, Types.TIME);
             return;
         }
+        if (isNative(column)
+                && sqlType == SqlType.STRING
+                && isExactNumeric(column.getSourceType())) {
+            // Exact numeric values are carried as strings. VARCHAR null typing
+            // works both for an existing NUMERIC target and our LONGVARCHAR
+            // fallback used when the source numeric shape is not representable.
+            statement.setNull(index, Types.VARCHAR);
+            return;
+        }
         if (sqlType == SqlType.STRING && isLongText(column)) {
             statement.setNull(index, Types.LONGVARCHAR);
             return;
         }
         if (sqlType == SqlType.BYTES && isLongBinary(column)) {
             statement.setNull(index, Types.LONGVARBINARY);
-            return;
-        }
-        if (isNative(column)
-                && sqlType == SqlType.STRING
-                && isExactNumeric(column.getSourceType())) {
-            statement.setNull(index, Types.NUMERIC);
             return;
         }
         super.writeNull(statement, index, column);
@@ -80,7 +82,7 @@ public final class IrisJdbcRowConverter extends AbstractJdbcRowConverter {
         if (isNative(column)
                 && sqlType == SqlType.STRING
                 && isExactNumeric(column.getSourceType())) {
-            statement.setBigDecimal(index, new BigDecimal(String.valueOf(value).trim()));
+            statement.setString(index, String.valueOf(value));
             return;
         }
         if (sqlType == SqlType.STRING && isLongText(column)) {
