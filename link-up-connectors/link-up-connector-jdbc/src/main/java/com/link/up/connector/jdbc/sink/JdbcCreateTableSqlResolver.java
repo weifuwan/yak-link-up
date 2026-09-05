@@ -6,12 +6,15 @@ import com.link.up.connector.jdbc.catalog.mysql.MySqlCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlTypeMapper;
 import com.link.up.connector.jdbc.catalog.oracle.OracleCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.postgres.PostgresCreateTableSqlBuilder;
+import com.link.up.connector.jdbc.catalog.sqlserver.SqlServerCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
 import com.link.up.connector.jdbc.core.dialect.oracle.OracleJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.oracle.OracleTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.postgres.PostgresTypeMapper;
+import com.link.up.connector.jdbc.core.dialect.sqlserver.SqlServerJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.sqlserver.SqlServerTypeMapper;
 
 import java.util.Locale;
 
@@ -116,6 +119,33 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.SQLSERVER
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new SqlServerCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new SqlServerTypeMapper())
+                    .build();
+        }
+
         /*
          * Future JDBC dialects can add their CREATE TABLE builder here
          * without changing the connector-neutral protocol.
@@ -131,6 +161,53 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isSqlServer(
+                connectionConfig)) {
+
+            String database =
+                    SqlServerJdbcUrl.databaseName(
+                            connectionConfig.getUrl());
+
+            String pathDatabase =
+                    tablePath.getDatabaseName();
+
+            String pathSchema =
+                    tablePath.getSchemaName();
+
+            String schema;
+
+            if (!hasText(pathDatabase)) {
+                schema = hasText(pathSchema)
+                        ? pathSchema.trim()
+                        : resolveSqlServerSchema(
+                                connectionConfig);
+            } else if (hasText(database)
+                    && database.equalsIgnoreCase(
+                            pathDatabase)) {
+                schema = hasText(pathSchema)
+                        ? pathSchema.trim()
+                        : resolveSqlServerSchema(
+                                connectionConfig);
+            } else {
+                /*
+                 * Do not leak a MySQL/PostgreSQL/Oracle source database/schema
+                 * into an unqualified SQL Server target.
+                 */
+                schema = resolveSqlServerSchema(
+                        connectionConfig);
+            }
+
+            return hasText(database)
+                    ? TablePath.of(
+                            database,
+                            schema,
+                            tablePath.getTableName())
+                    : TablePath.of(
+                            null,
+                            schema,
+                            tablePath.getTableName());
         }
 
         if (isOracle(
@@ -213,6 +290,15 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
+    private static String resolveSqlServerSchema(
+            JdbcConnectionConfig config) {
+
+        return hasText(
+                config.getSchema())
+                ? config.getSchema().trim()
+                : "dbo";
+    }
+
     private static String resolveOracleSchema(
             JdbcConnectionConfig config,
             TablePath tablePath,
@@ -290,6 +376,20 @@ final class JdbcCreateTableSqlResolver {
         }
 
         return OracleJdbcUrl.accepts(
+                config.getUrl());
+    }
+
+    private static boolean isSqlServer(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.SQLSERVER
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return SqlServerJdbcUrl.accepts(
                 config.getUrl());
     }
 
