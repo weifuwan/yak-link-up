@@ -48,9 +48,9 @@ public class IrisCreateTableSqlBuilderTest {
         assertTrue(ddl.contains("%DESCRIPTION 'users table'"));
         assertTrue(ddl.contains("\"Id\" SERIAL NOT NULL"));
         assertTrue(ddl.contains(
-                "\"Name\" VARCHAR(64) %DESCRIPTION 'display name' NULL"));
-        assertTrue(ddl.contains("\"Amount\" NUMERIC(37,18) NULL"));
-        assertTrue(ddl.contains("\"Payload\" LONGVARCHAR NULL"));
+                "\"Name\" VARCHAR(64) %DESCRIPTION 'display name'"));
+        assertTrue(ddl.contains("\"Amount\" NUMERIC(37,18)"));
+        assertTrue(ddl.contains("\"Payload\" LONGVARCHAR"));
         assertTrue(ddl.contains(
                 "CONSTRAINT \"PK_Users\" PRIMARY KEY (\"Id\")"));
     }
@@ -77,8 +77,29 @@ public class IrisCreateTableSqlBuilderTest {
                 new IrisTypeMapper())
                 .build();
 
-        assertTrue(ddl.contains("\"EventId\" GUID NULL"));
-        assertTrue(ddl.contains("\"Version\" BIGINT NULL"));
+        assertTrue(ddl.contains("\"EventId\" GUID"));
+        assertTrue(ddl.contains("\"Version\" BIGINT"));
+    }
+
+    @Test
+    public void unrepresentableSameDialectNumericFallsBackToLongVarchar() {
+        TablePath path = TablePath.of("USER", "App", "Amounts");
+        TableSchema schema = TableSchema.builder()
+                .column(Column.builder("Amount", BasicType.STRING_TYPE)
+                        .sourceType("NUMERIC(20,0)")
+                        .build())
+                .build();
+        CatalogTable table = CatalogTable.builder(path, schema)
+                .option(IrisCatalog.TABLE_OPTION_DIALECT, IrisCatalog.DIALECT)
+                .build();
+
+        String ddl = new IrisCreateTableSqlBuilder(
+                path,
+                table,
+                new IrisTypeMapper())
+                .build();
+
+        assertTrue(ddl.contains("\"Amount\" LONGVARCHAR"));
     }
 
     @Test
