@@ -135,14 +135,11 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
         String type = normalize(sourceType);
         String base = baseType(type);
 
-        if ("timetz".equals(base)
-                || (type.startsWith("time") && type.contains("time zone"))) {
+        if (isTimeWithTimeZone(type, base)) {
             // Flux has no TIME_TZ primitive. Keep the full offset-bearing value.
             return BasicType.STRING_TYPE;
         }
-        if ("timestamptz".equals(base)
-                || ((type.startsWith("timestamp") || type.startsWith("datetime"))
-                && type.contains("time zone"))) {
+        if (isTimestampWithTimeZone(type, base)) {
             return BasicType.TIMESTAMP_TZ_TYPE;
         }
         if (type.startsWith("timestamp")
@@ -321,12 +318,12 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
             int scale) {
 
         SqlType sqlType = dataType.getSqlType();
-        String base = baseType(normalize(sourceType));
+        String normalizedSourceType = normalize(sourceType);
+        String base = baseType(normalizedSourceType);
 
         if (sqlType == SqlType.STRING || sqlType == SqlType.BYTES) {
             if (!isNumericBase(base)
-                    && !"time with time zone".equals(normalize(sourceType))
-                    && !"timetz".equals(base)
+                    && !isTimeWithTimeZone(normalizedSourceType, base)
                     && precision > 0) {
                 builder.length((long) precision);
             }
@@ -367,13 +364,35 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
         if (isLengthType(base)) {
             return precision > 0 ? raw + "(" + precision + ")" : raw;
         }
+        if (isTimeWithTimeZone(normalized, base)) {
+            return scale > 0
+                    ? "TIME(" + Math.min(scale, MAX_TIME_PRECISION) + ") WITH TIME ZONE"
+                    : raw;
+        }
+        if (isTimestampWithTimeZone(normalized, base)) {
+            return scale > 0
+                    ? "TIMESTAMP(" + Math.min(scale, MAX_TIME_PRECISION) + ") WITH TIME ZONE"
+                    : raw;
+        }
         if (base.startsWith("timestamp")
                 || "time".equals(base)
-                || "timetz".equals(base)
                 || "datetime".equals(base)) {
             return scale > 0 ? raw + "(" + Math.min(scale, MAX_TIME_PRECISION) + ")" : raw;
         }
         return raw;
+    }
+
+    private static boolean isTimeWithTimeZone(String type, String base) {
+        return "timetz".equals(base)
+                || (type.startsWith("time")
+                && !type.startsWith("timestamp")
+                && type.contains("time zone"));
+    }
+
+    private static boolean isTimestampWithTimeZone(String type, String base) {
+        return "timestamptz".equals(base)
+                || ((type.startsWith("timestamp") || type.startsWith("datetime"))
+                && type.contains("time zone"));
     }
 
     private static boolean isStringLike(String type, String base) {
