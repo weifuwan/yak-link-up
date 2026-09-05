@@ -65,6 +65,7 @@ public class IrisCreateTableSqlBuilderTest {
                         .build())
                 .column(Column.builder("Version", BasicType.LONG_TYPE)
                         .sourceType("ROWVERSION")
+                        .autoIncrement(true)
                         .build())
                 .build();
         CatalogTable table = CatalogTable.builder(path, schema)
