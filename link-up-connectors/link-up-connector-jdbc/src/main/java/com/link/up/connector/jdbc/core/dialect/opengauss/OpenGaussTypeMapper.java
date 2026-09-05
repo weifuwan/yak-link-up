@@ -135,17 +135,18 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
         String type = normalize(sourceType);
         String base = baseType(type);
 
-        if ("time with time zone".equals(type)
-                || "timetz".equals(base)) {
+        if ("timetz".equals(base)
+                || (type.startsWith("time") && type.contains("time zone"))) {
             // Flux has no TIME_TZ primitive. Keep the full offset-bearing value.
             return BasicType.STRING_TYPE;
         }
-        if ("timestamp with time zone".equals(type)
-                || "timestamptz".equals(base)) {
+        if ("timestamptz".equals(base)
+                || ((type.startsWith("timestamp") || type.startsWith("datetime"))
+                && type.contains("time zone"))) {
             return BasicType.TIMESTAMP_TZ_TYPE;
         }
         if (type.startsWith("timestamp")
-                || "datetime".equals(base)
+                || type.startsWith("datetime")
                 || "smalldatetime".equals(base)) {
             return BasicType.TIMESTAMP_TYPE;
         }
@@ -158,7 +159,9 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
             case "int1":
             case "tinyint":
             case "byte":
-                return BasicType.BYTE_TYPE;
+                // openGauss int1/tinyint may expose uint8 (0..255).
+                // Use SHORT so values above Java Byte.MAX_VALUE are lossless.
+                return BasicType.SHORT_TYPE;
             case "int2":
             case "smallint":
             case "smallserial":
@@ -219,7 +222,7 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
             case Types.BIT:
                 return BasicType.BOOLEAN_TYPE;
             case Types.TINYINT:
-                return BasicType.BYTE_TYPE;
+                return BasicType.SHORT_TYPE;
             case Types.SMALLINT:
                 return BasicType.SHORT_TYPE;
             case Types.INTEGER:
@@ -300,7 +303,6 @@ public final class OpenGaussTypeMapper implements JdbcTypeMapper {
         if (length == null || length <= 0 || length > MAX_SAFE_VARCHAR_CHARS) {
             return "TEXT";
         }
-        // Explicit CHAR semantics avoids byte-length truncation outside PG mode.
         return "VARCHAR(" + length + " CHAR)";
     }
 
