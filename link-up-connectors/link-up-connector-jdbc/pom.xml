@@ -103,6 +103,11 @@
             <artifactId>duckdb_jdbc</artifactId>
             <version>1.5.5.1</version>
         </dependency>
+        <dependency>
+            <groupId>com.highgo</groupId>
+            <artifactId>HgdbJdbc</artifactId>
+            <version>6.2.5</version>
+        </dependency>
     </dependencies>
 
 </project>
