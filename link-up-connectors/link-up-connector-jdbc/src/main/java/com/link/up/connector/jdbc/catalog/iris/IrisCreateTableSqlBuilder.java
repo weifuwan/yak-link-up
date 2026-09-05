@@ -51,7 +51,8 @@ public final class IrisCreateTableSqlBuilder {
         parts.add(quote(column.getName()));
 
         if (column.isAutoIncrement()
-                && isInteger(column.getDataType().getSqlType())) {
+                && isInteger(column.getDataType().getSqlType())
+                && !isReadOnlyRowVersion(column)) {
             // SERIAL permits source IDs to be inserted explicitly, unlike
             // IDENTITY, while still maintaining an automatic counter.
             parts.add("SERIAL");
@@ -104,16 +105,12 @@ public final class IrisCreateTableSqlBuilder {
                 + "\n);";
     }
 
+    private static boolean isReadOnlyRowVersion(Column column) {
+        return "rowversion".equals(baseSourceType(column));
+    }
+
     private static boolean shouldPreserveSourceType(Column column) {
-        String sourceType = column.getSourceType();
-        if (!hasText(sourceType)) {
-            return true;
-        }
-        String normalized = sourceType.trim().toLowerCase(Locale.ROOT);
-        int parenthesis = normalized.indexOf('(');
-        String base = parenthesis >= 0
-                ? normalized.substring(0, parenthesis).trim()
-                : normalized;
+        String base = baseSourceType(column);
         boolean numericSource = "numeric".equals(base)
                 || "decimal".equals(base)
                 || "dec".equals(base)
@@ -124,6 +121,18 @@ public final class IrisCreateTableSqlBuilder {
         // the same explicit type could reintroduce clamping, so use LONGVARCHAR.
         return !(numericSource
                 && column.getDataType().getSqlType() == SqlType.STRING);
+    }
+
+    private static String baseSourceType(Column column) {
+        String sourceType = column.getSourceType();
+        if (!hasText(sourceType)) {
+            return "";
+        }
+        String normalized = sourceType.trim().toLowerCase(Locale.ROOT);
+        int parenthesis = normalized.indexOf('(');
+        return parenthesis >= 0
+                ? normalized.substring(0, parenthesis).trim()
+                : normalized;
     }
 
     private static String buildPrimaryKey(PrimaryKey primaryKey) {
