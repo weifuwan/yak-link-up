@@ -44,9 +44,11 @@ StarRocks 使用独立的 `link-up-connector-starrocks`：
 - BE 返回 Apache Arrow，Connector 在边界内转换为 `FluxRow`。
 - StarRocks Source 不依赖 JDBC / MySQL Driver，也不复用 JDBC Split Planner。
 - Stage 1 只处理 bounded full read；Schema 由任务显式声明，复杂类型在没有安全映射前明确失败。
-- Stage 2 的 Sink 使用 StarRocks Stream Load，并继续留在同一个独立 Connector 模块中，不回落到 JDBC batch insert。
+- Stage 2 Sink 通过 Stream Load 写入：按行数/字节数形成批次，网络重试复用 label；`Label Already Exists` 必须先确认 label 最终状态，只有明确 `ABORTED` 才允许换新 label。
+- Stream Load 成功 flush 已经是远端独立提交；没有真正 2PC 时，不把 Link-Up 的 `commit/abort` 生命周期包装成 Job-level exactly once。
+- Stage 2 不使用 JDBC 自动建表，也不声明 CDC / DELETE / runtime schema evolution 能力。
 
-这种例外是协议边界，不是为数据库复制通用执行框架。Source 仍复用 Link-Up 的 `SourceSplitEnumerator`、动态 Split 分配、`SourceReader`、Channel、Metrics 和 Job 生命周期。
+这种例外是协议边界，不是为数据库复制通用执行框架。Source 仍复用 Link-Up 的 `SourceSplitEnumerator`、动态 Split 分配、`SourceReader`、Channel、Metrics 和 Job 生命周期；Sink 仍复用 `SinkPreparer`、`SinkWriter`、Task commit evidence 和统一错误传播。
 
 ## 数据库差异不要强行抹平
 
