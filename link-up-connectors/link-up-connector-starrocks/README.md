@@ -55,6 +55,7 @@ Stage 2 支持：
 - JSON 日期/时间/Decimal 的稳定序列化
 - CSV schema 顺序 `columns` header
 - `BINARY/VARBINARY` 仅在 CSV 模式按十六进制文本写入
+- Stream Load 返回过滤行时接入 Link-Up dirty-data evidence，避免“任务成功但少数据”只存在于日志
 
 Stage 2 明确不包含：
 
@@ -66,8 +67,10 @@ Stage 2 明确不包含：
 - Merge Commit / 异步合并提交
 - 运行时 Schema Evolution
 - 多目标表 Sink
+- `ARRAY` / `MAP` / `ROW` 复杂类型写入
+- `TIMESTAMP_TZ` 到 StarRocks `DATETIME` 的隐式时区丢弃
 
-Stream Load 每次成功 flush 都已经在 StarRocks 侧形成独立提交，所以 Link-Up `commit()` 不能把它描述成可回滚事务。`abort()` 只能丢弃还没发送的本地 buffer，不能撤销已经成功的 Stream Load。
+Stream Load 每次成功 flush 都已经在 StarRocks 侧形成独立提交，所以 Link-Up `commit()` 不能把它描述成可回滚事务。`abort()` 只能丢弃还没发送的本地 buffer，不能撤销已经成功的 Stream Load；`close()` 同样不会偷偷 flush 尚未进入 `prepareCommit()` 的 buffer。
 
 Connector 在一次 flush 的内部重试会复用相同 label，避免网络超时造成重复导入；但如果整个 Link-Up SinkTask 重新执行，会创建新的 label，因此任务级 Retry 仍应结合目标表自身的 key/去重语义判断。
 
@@ -98,6 +101,14 @@ Connector 在一次 flush 的内部重试会复用相同 label，避免网络超
 - `compression` / `content-encoding`（当前 payload 未压缩）
 
 这样可以保证 label 幂等重试、payload 编码和 bounded full-row write 的语义不被透传参数悄悄改写。
+
+### Filtered rows / dirty-data evidence
+
+默认情况下 Stream Load 应通过严格模式尽早暴露非法数据。如果用户显式允许 `max_filter_ratio > 0`，StarRocks 可能返回成功同时带有 `NumberFilteredRows > 0`。
+
+Stage 2 会保留 StarRocks 的成功结果，但同时向 Link-Up `DirtyDataAwareSinkWriter` 写入 `STREAM_LOAD_FILTERED` 证据，包含过滤数量、Message 和 ErrorURL（如有）。这样 Job 结果可以看到数据损失证据，而不是只能翻 Sink 日志。
+
+这不是逐行重放或 CDC dirty-row recovery；Stream Load 响应只提供批次级过滤信息，因此 Stage 2 只记录批次级 evidence。
 
 ## Native Source single table example
 
@@ -204,7 +215,9 @@ sink {
 }
 ```
 
-CSV Stage 2 不会猜测 quoting/enclose 规则。如果字段值包含已配置的列分隔符或行分隔符，Connector 会直接失败并建议改用 JSON，避免生成 StarRocks 解析语义不确定的数据。`BINARY/VARBINARY` 是例外：StarRocks Stream Load 对这类字段只支持 CSV，Connector 会把 `byte[]` 编码为十六进制文本。
+CSV Stage 2 不会猜测 quoting/enclose 规则。如果字段值包含已配置的列分隔符或行分隔符，Connector 会直接失败并建议改用 JSON，避免生成 StarRocks 解析语义不确定的数据。非空字符串如果恰好等于 CSV NULL marker `\N` 也会 fail-fast，避免被目标端静默解释成 NULL。
+
+`BINARY/VARBINARY` 是例外：StarRocks Stream Load 对这类字段只支持 CSV，Connector 会把 `byte[]` 编码为十六进制文本。
 
 ## Type boundary
 
@@ -212,8 +225,8 @@ Native Source 的类型边界保持保守。核心标量 StarRocks 类型会映�
 
 `LARGEINT` 在 Source 中以精确文本承载，避免完整 signed 128-bit 范围被错误压缩到 `DECIMAL(38,0)`。
 
-Source 的 `ARRAY` / `MAP` 在没有专门 Arrow 转换验证前仍会配置阶段 fail-fast。Sink 对已经存在于 Flux 行中的 `ARRAY/MAP` 可以保留 JSON-compatible 结构；这不等于复杂类型自动发现或 runtime schema evolution。
+Stage 2 Sink 同样只承诺已经验证过的离线标量写入。`ARRAY` / `MAP` / `ROW` 需要独立的目标类型、嵌套字段和 Stream Load 兼容性测试，因此当前在 Schema 初始化阶段 fail-fast，不根据 Java Collection 或位置字段猜测目标结构。
 
-`ROW/STRUCT` 需要嵌套字段名和目标结构元数据。Stage 2 不从 `FluxRow` 的位置字段猜测 STRUCT 字段，因此会 fail-fast，留给后续专门的复杂类型适配，而不是静默写错。
+Flux `TIMESTAMP_TZ` 会携带 offset，而 StarRocks `DATETIME` 不应由 Connector 隐式决定如何丢弃该 offset。Stage 2 因此 fail-fast，要求任务在上游显式转换为期望时区的 `TIMESTAMP`。
 
-`BYTES` 对应 StarRocks `BINARY/VARBINARY` 时只支持 CSV 十六进制写入；JSON 模式会在序列化阶段 fail-fast。
+`BYTES` 对应 StarRocks `BINARY/VARBINARY` 时只支持 CSV 十六进制写入；JSON 模式会在 Schema 初始化阶段 fail-fast。

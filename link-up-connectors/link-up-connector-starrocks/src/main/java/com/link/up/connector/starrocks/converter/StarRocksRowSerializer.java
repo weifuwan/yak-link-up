@@ -10,14 +10,11 @@ import com.link.up.connector.starrocks.config.StarRocksLoadFormat;
 import com.link.up.connector.starrocks.config.StarRocksSinkConfig;
 
 import java.io.ByteArrayOutputStream;
-import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +24,7 @@ public final class StarRocksRowSerializer {
 
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+    private static final String CSV_NULL_MARKER = "\\N";
 
     private final StarRocksSinkConfig config;
     private final TableSchema schema;
@@ -43,6 +41,7 @@ public final class StarRocksRowSerializer {
         }
         this.config = config;
         this.schema = schema;
+        validateSchema();
         this.rowDelimiterBytes = config.getRowDelimiter().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -134,11 +133,16 @@ public final class StarRocksRowSerializer {
             }
             Object value = row.getField(i);
             if (value == null) {
-                builder.append("\\N");
+                builder.append(CSV_NULL_MARKER);
                 continue;
             }
             SqlType sqlType = schema.getColumn(i).getDataType().getSqlType();
             String text = csvText(value, sqlType);
+            if (CSV_NULL_MARKER.equals(text)) {
+                throw new IllegalArgumentException(
+                        "Non-null CSV value equals StarRocks null marker \\N; "
+                                + "use JSON load_format or normalize the value upstream");
+            }
             if (text.contains(separator)
                     || text.contains(config.getRowDelimiter())
                     || text.indexOf('\n') >= 0
@@ -187,66 +191,20 @@ public final class StarRocksRowSerializer {
             case TIMESTAMP:
                 return timestampText(value);
             case BYTES:
-                throw new IllegalArgumentException(
-                        "StarRocks BINARY/VARBINARY Stream Load is not supported with JSON; "
-                                + "use load_format=CSV so bytes can be encoded as hexadecimal text");
-            case STRING:
+                throw unsupportedBinaryJson();
             case TIMESTAMP_TZ:
-                return String.valueOf(value);
+                throw unsupportedTimezoneTimestamp();
             case ARRAY:
             case MAP:
-                return normalizeAny(value);
             case ROW:
-                throw new IllegalArgumentException(
-                        "StarRocks ROW/STRUCT Sink values require explicit nested field metadata; "
-                                + "Stage 2 intentionally does not infer STRUCT fields from FluxRow values");
+                throw unsupportedComplexType(sqlType);
+            case STRING:
+                return String.valueOf(value);
             case NULL:
                 return null;
             default:
-                return normalizeAny(value);
+                return String.valueOf(value);
         }
-    }
-
-    private static Object normalizeAny(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof LocalDate
-                || value instanceof LocalTime) {
-            return value.toString();
-        }
-        if (value instanceof LocalDateTime) {
-            return timestampText(value);
-        }
-        if (value instanceof byte[]) {
-            throw new IllegalArgumentException(
-                    "Nested binary values are not supported by the bounded StarRocks Stage 2 serializer");
-        }
-        if (value instanceof Map) {
-            Map<?, ?> source = (Map<?, ?>) value;
-            Map<String, Object> result = new LinkedHashMap<String, Object>();
-            for (Map.Entry<?, ?> entry : source.entrySet()) {
-                result.put(String.valueOf(entry.getKey()), normalizeAny(entry.getValue()));
-            }
-            return result;
-        }
-        if (value instanceof Collection) {
-            List<Object> result = new ArrayList<Object>();
-            for (Object item : (Collection<?>) value) {
-                result.add(normalizeAny(item));
-            }
-            return result;
-        }
-        Class<?> type = value.getClass();
-        if (type.isArray()) {
-            int length = Array.getLength(value);
-            List<Object> result = new ArrayList<Object>(length);
-            for (int i = 0; i < length; i++) {
-                result.add(normalizeAny(Array.get(value, i)));
-            }
-            return result;
-        }
-        return value;
     }
 
     private static String csvText(Object value, SqlType sqlType) {
@@ -257,10 +215,11 @@ public final class StarRocksRowSerializer {
             }
             return toHex((byte[]) value);
         }
-        if (sqlType == SqlType.ROW) {
-            throw new IllegalArgumentException(
-                    "StarRocks ROW/STRUCT Sink values require explicit nested field metadata; "
-                            + "Stage 2 intentionally does not infer STRUCT fields from FluxRow values");
+        if (sqlType == SqlType.TIMESTAMP_TZ) {
+            throw unsupportedTimezoneTimestamp();
+        }
+        if (sqlType == SqlType.ARRAY || sqlType == SqlType.MAP || sqlType == SqlType.ROW) {
+            throw unsupportedComplexType(sqlType);
         }
         if (value instanceof LocalDateTime) {
             return timestampText(value);
@@ -268,14 +227,53 @@ public final class StarRocksRowSerializer {
         if (value instanceof LocalDate || value instanceof LocalTime) {
             return value.toString();
         }
-        if (value instanceof Map || value instanceof Collection || value.getClass().isArray()) {
-            try {
-                return JSON_MAPPER.writeValueAsString(normalizeAny(value));
-            } catch (JsonProcessingException failure) {
-                throw new IllegalArgumentException("Failed to serialize complex CSV value", failure);
+        return String.valueOf(value);
+    }
+
+    private void validateSchema() {
+        for (Column column : schema.getColumns()) {
+            SqlType sqlType = column.getDataType().getSqlType();
+            if (sqlType == SqlType.BYTES && config.getLoadFormat() == StarRocksLoadFormat.JSON) {
+                throw new IllegalArgumentException(
+                        "StarRocks Sink column '"
+                                + column.getName()
+                                + "' is BYTES: BINARY/VARBINARY Stream Load requires load_format=CSV");
+            }
+            if (sqlType == SqlType.TIMESTAMP_TZ) {
+                throw new IllegalArgumentException(
+                        "StarRocks Sink column '"
+                                + column.getName()
+                                + "' is TIMESTAMP_TZ: Stage 2 does not implicitly discard timezone offsets; "
+                                + "convert it explicitly upstream before loading into DATETIME");
+            }
+            if (sqlType == SqlType.ARRAY || sqlType == SqlType.MAP || sqlType == SqlType.ROW) {
+                throw new IllegalArgumentException(
+                        "StarRocks Sink column '"
+                                + column.getName()
+                                + "' uses unsupported Stage 2 complex type "
+                                + sqlType
+                                + "; map it to a validated scalar representation explicitly");
             }
         }
-        return String.valueOf(value);
+    }
+
+    private static IllegalArgumentException unsupportedBinaryJson() {
+        return new IllegalArgumentException(
+                "StarRocks BINARY/VARBINARY Stream Load is not supported with JSON; "
+                        + "use load_format=CSV so bytes can be encoded as hexadecimal text");
+    }
+
+    private static IllegalArgumentException unsupportedTimezoneTimestamp() {
+        return new IllegalArgumentException(
+                "StarRocks Stage 2 does not implicitly discard TIMESTAMP_TZ offsets; "
+                        + "convert the value explicitly upstream before loading into DATETIME");
+    }
+
+    private static IllegalArgumentException unsupportedComplexType(SqlType sqlType) {
+        return new IllegalArgumentException(
+                "StarRocks Stage 2 does not support complex Sink type "
+                        + sqlType
+                        + " yet; map it to a validated scalar representation explicitly");
     }
 
     private static String toHex(byte[] value) {

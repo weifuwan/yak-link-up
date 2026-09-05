@@ -100,14 +100,23 @@ public class StarRocksRowSerializerTest {
     }
 
     @Test(expected = IllegalArgumentException.class)
-    public void jsonRejectsBinaryBecauseStarRocksJsonLoadDoesNotSupportIt() {
+    public void jsonRejectsBinaryAtSchemaInitialization() {
         StarRocksSinkConfig config = config("JSON", "\t");
         TableSchema schema = TableSchema.builder()
                 .column(Column.builder("payload", BasicType.BYTES_TYPE).build())
                 .build();
 
-        new StarRocksRowSerializer(config, schema)
-                .serializeRow(FluxRow.of(new byte[] {0x01, 0x02}));
+        new StarRocksRowSerializer(config, schema);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsTimestampWithTimezoneInsteadOfDroppingOffset() {
+        StarRocksSinkConfig config = config("JSON", "\t");
+        TableSchema schema = TableSchema.builder()
+                .column(Column.builder("created_at", BasicType.TIMESTAMP_TZ_TYPE).build())
+                .build();
+
+        new StarRocksRowSerializer(config, schema);
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -118,6 +127,16 @@ public class StarRocksRowSerializerTest {
                 .build();
         new StarRocksRowSerializer(config, schema)
                 .serializeRow(FluxRow.of("A|B"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void csvRejectsNonNullValueEqualToNullMarker() {
+        StarRocksSinkConfig config = config("CSV", "|");
+        TableSchema schema = TableSchema.builder()
+                .column(Column.builder("name", BasicType.STRING_TYPE).build())
+                .build();
+        new StarRocksRowSerializer(config, schema)
+                .serializeRow(FluxRow.of("\\N"));
     }
 
     private static StarRocksSinkConfig config(String format, String separator) {

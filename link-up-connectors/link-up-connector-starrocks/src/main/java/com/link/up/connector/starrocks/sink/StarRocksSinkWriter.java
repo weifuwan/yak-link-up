@@ -1,6 +1,12 @@
 package com.link.up.connector.starrocks.sink;
 
+import com.link.up.api.dirtydata.BoundedMemoryDirtyDataCollector;
+import com.link.up.api.dirtydata.DirtyDataCollector;
+import com.link.up.api.dirtydata.DirtyDataContext;
+import com.link.up.api.dirtydata.DirtyDataSummary;
+import com.link.up.api.dirtydata.DirtyRecord;
 import com.link.up.api.sink.CommitScope;
+import com.link.up.api.sink.DirtyDataAwareSinkWriter;
 import com.link.up.api.sink.PreparedSinkMetadata;
 import com.link.up.api.sink.SinkWriter;
 import com.link.up.api.source.RecordBatch;
@@ -19,12 +25,13 @@ import java.util.List;
 import java.util.Objects;
 
 /** Writes bounded FluxRow batches through StarRocks Stream Load. */
-public final class StarRocksSinkWriter implements SinkWriter<FluxRow> {
+public final class StarRocksSinkWriter
+        implements SinkWriter<FluxRow>, DirtyDataAwareSinkWriter {
 
     private static final Logger LOG = LoggerFactory.getLogger(StarRocksSinkWriter.class);
 
     private final StarRocksSinkConfig config;
-    private final StarRocksStreamLoadClient client;
+    private final StreamLoadExecutor streamLoadExecutor;
     private final List<byte[]> bufferedRecords = new ArrayList<byte[]>();
 
     private TableSchema schema;
@@ -35,28 +42,37 @@ public final class StarRocksSinkWriter implements SinkWriter<FluxRow> {
     private long totalFilteredRows;
     private boolean opened;
 
+    private DirtyDataCollector dirtyDataCollector;
+    private DirtyDataContext dirtyDataContext;
+
     public StarRocksSinkWriter(
             StarRocksSinkConfig config,
             PreparedSinkMetadata metadata) {
         this(
                 config,
                 metadata,
-                new StarRocksStreamLoadClient(
-                        Objects.requireNonNull(config, "config must not be null")));
+                new HttpStreamLoadExecutor(
+                        new StarRocksStreamLoadClient(
+                                Objects.requireNonNull(config, "config must not be null"))));
     }
 
     StarRocksSinkWriter(
             StarRocksSinkConfig config,
             PreparedSinkMetadata metadata,
-            StarRocksStreamLoadClient client) {
+            StreamLoadExecutor streamLoadExecutor) {
         this.config = Objects.requireNonNull(config, "config must not be null");
         Objects.requireNonNull(metadata, "metadata must not be null");
-        this.client = Objects.requireNonNull(client, "client must not be null");
+        this.streamLoadExecutor = Objects.requireNonNull(
+                streamLoadExecutor,
+                "streamLoadExecutor must not be null");
     }
 
     @Override
-    public void open() {
+    public void open() throws Exception {
         opened = true;
+        if (dirtyDataCollector != null) {
+            dirtyDataCollector.open();
+        }
         LOG.info(
                 "StarRocks SinkWriter opened: database={}, table={}, format={}, maxRows={}, maxBytes={}",
                 config.getDatabase(),
@@ -150,13 +166,35 @@ public final class StarRocksSinkWriter implements SinkWriter<FluxRow> {
     }
 
     @Override
-    public void close() {
+    public void configureDirtyData(DirtyDataContext context) throws Exception {
+        dirtyDataContext = Objects.requireNonNull(context, "context must not be null");
+        dirtyDataCollector =
+                new BoundedMemoryDirtyDataCollector(
+                        context.getTaskId(),
+                        100,
+                        1000,
+                        0.1);
+        if (opened) {
+            dirtyDataCollector.open();
+        }
+    }
+
+    @Override
+    public DirtyDataSummary getDirtyDataSummary() {
+        return dirtyDataCollector == null
+                ? DirtyDataSummary.empty()
+                : dirtyDataCollector.summary();
+    }
+
+    @Override
+    public void close() throws Exception {
         try {
             bufferedRecords.clear();
             bufferedRecordBytes = 0L;
-            client.close();
+            streamLoadExecutor.close();
         } finally {
             opened = false;
+            closeDirtyDataCollector();
         }
         LOG.info(
                 "StarRocks SinkWriter closed: totalWrittenRows={}, totalLoadRequests={}, totalFilteredRows={}",
@@ -193,39 +231,107 @@ public final class StarRocksSinkWriter implements SinkWriter<FluxRow> {
                     "Cannot flush StarRocks Sink before source schema is initialized");
         }
 
+        int flushRows = bufferedRecords.size();
         byte[] payload = serializer.joinRecords(bufferedRecords, bufferedRecordBytes);
         LOG.debug(
                 "Flushing StarRocks Stream Load batch: rows={}, payloadBytes={}",
-                bufferedRecords.size(),
+                flushRows,
                 payload.length);
 
-        StarRocksStreamLoadResponse response = client.load(payload, schema);
+        StarRocksStreamLoadResponse response = streamLoadExecutor.load(payload, schema);
         if (!response.isSuccess()) {
             throw new IllegalStateException(
                     "StarRocks Stream Load client returned non-success response: "
                             + response.getStatus());
         }
 
-        totalWrittenRows += bufferedRecords.size();
+        totalWrittenRows += flushRows;
         totalLoadRequests++;
         totalFilteredRows += response.getNumberFilteredRows();
-
-        if (response.getNumberFilteredRows() > 0L) {
-            LOG.warn(
-                    "StarRocks Stream Load filtered {} rows: label={}, message={}, errorUrl={}",
-                    response.getNumberFilteredRows(),
-                    response.getLabel(),
-                    response.getMessage(),
-                    response.getErrorUrl());
-        }
+        recordFilteredRows(response, flushRows);
 
         bufferedRecords.clear();
         bufferedRecordBytes = 0L;
     }
 
+    private void recordFilteredRows(
+            StarRocksStreamLoadResponse response,
+            int flushRows) {
+        if (response.getNumberFilteredRows() <= 0L) {
+            return;
+        }
+
+        LOG.warn(
+                "StarRocks Stream Load filtered {} rows: label={}, message={}, errorUrl={}",
+                response.getNumberFilteredRows(),
+                response.getLabel(),
+                response.getMessage(),
+                response.getErrorUrl());
+
+        if (dirtyDataCollector == null) {
+            return;
+        }
+
+        try {
+            dirtyDataCollector.recordAttempt(flushRows);
+            String message =
+                    "StarRocks Stream Load filtered "
+                            + response.getNumberFilteredRows()
+                            + " rows: "
+                            + response.getMessage();
+            if (response.getErrorUrl() != null && !response.getErrorUrl().trim().isEmpty()) {
+                message += ", ErrorURL=" + response.getErrorUrl();
+            }
+            dirtyDataCollector.collect(
+                    new DirtyRecord(
+                            "STREAM_LOAD_FILTERED",
+                            message,
+                            dirtyDataContext,
+                            System.currentTimeMillis()));
+        } catch (Exception failure) {
+            LOG.error("Failed to record StarRocks dirty-data evidence", failure);
+        }
+    }
+
+    private void closeDirtyDataCollector() {
+        if (dirtyDataCollector == null) {
+            return;
+        }
+        try {
+            dirtyDataCollector.close(true);
+        } catch (Exception failure) {
+            LOG.warn("Failed to close StarRocks dirty data collector", failure);
+        }
+    }
+
     private void checkOpened() {
         if (!opened) {
             throw new IllegalStateException("StarRocks SinkWriter has not been opened");
+        }
+    }
+
+    interface StreamLoadExecutor extends AutoCloseable {
+        StarRocksStreamLoadResponse load(byte[] payload, TableSchema schema) throws Exception;
+
+        @Override
+        void close() throws Exception;
+    }
+
+    private static final class HttpStreamLoadExecutor implements StreamLoadExecutor {
+        private final StarRocksStreamLoadClient client;
+
+        private HttpStreamLoadExecutor(StarRocksStreamLoadClient client) {
+            this.client = client;
+        }
+
+        @Override
+        public StarRocksStreamLoadResponse load(byte[] payload, TableSchema schema) throws Exception {
+            return client.load(payload, schema);
+        }
+
+        @Override
+        public void close() {
+            client.close();
         }
     }
 }
