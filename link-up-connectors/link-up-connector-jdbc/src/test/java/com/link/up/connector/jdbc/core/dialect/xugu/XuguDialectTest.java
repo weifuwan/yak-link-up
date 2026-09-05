@@ -99,6 +99,43 @@ public class XuguDialectTest {
     }
 
     @Test
+    public void connectorSchemaBecomesQuotedCurrentSchemaConnectionDefault() {
+        XuguDialect dialect = new XuguDialect(config(
+                "AppSchema",
+                null,
+                baseUrl(),
+                null));
+
+        assertEquals(
+                "\"AppSchema\"",
+                dialect.defaultConnectionProperties().get("current_schema"));
+    }
+
+    @Test
+    public void urlCurrentSchemaIsNotOverriddenByConnectorSchemaDefault() {
+        XuguDialect dialect = new XuguDialect(config(
+                "FROM_CONNECTOR",
+                null,
+                baseUrl() + "?current_schema=FROM_URL",
+                null));
+
+        assertFalse(dialect.defaultConnectionProperties().containsKey("current_schema"));
+    }
+
+    @Test
+    public void propertyCurrentSchemaIsNotOverriddenByConnectorSchemaDefault() {
+        Map<String, String> properties = new LinkedHashMap<String, String>();
+        properties.put("current_schema", "FROM_PROPERTIES");
+        XuguDialect dialect = new XuguDialect(config(
+                "FROM_CONNECTOR",
+                null,
+                baseUrl(),
+                properties));
+
+        assertFalse(dialect.defaultConnectionProperties().containsKey("current_schema"));
+    }
+
+    @Test
     public void usernameSchemaIsUsedWhenNoSchemaConfigured() {
         XuguDialect dialect = new XuguDialect(config(null, null, baseUrl(), null));
         assertEquals(
