@@ -117,21 +117,31 @@ final class JdbcSinkPreparer implements SinkPreparer {
     }
 
     private TablePath resolveTargetPath(TablePath tablePath) {
-        return DuckDbSinkSupport.accepts(config.getConnectionConfig())
-                ? DuckDbSinkSupport.resolveTargetPath(
-                        config.getConnectionConfig(), tablePath)
-                : JdbcCreateTableSqlResolver.resolveTargetPath(
-                        config.getConnectionConfig(), tablePath);
+        if (DuckDbSinkSupport.accepts(config.getConnectionConfig())) {
+            return DuckDbSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
+        if (HighGoSinkSupport.accepts(config.getConnectionConfig())) {
+            return HighGoSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
+        return JdbcCreateTableSqlResolver.resolveTargetPath(
+                config.getConnectionConfig(), tablePath);
     }
 
     private String resolveCreateTableSql(CatalogTable table) {
-        return DuckDbSinkSupport.accepts(config.getConnectionConfig())
-                ? DuckDbSinkSupport.resolveCreateTableSql(
-                        config.getConnectionConfig(), table)
-                : JdbcCreateTableSqlResolver.resolve(
-                        dialect,
-                        config.getConnectionConfig(),
-                        table);
+        if (DuckDbSinkSupport.accepts(config.getConnectionConfig())) {
+            return DuckDbSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(), table);
+        }
+        if (HighGoSinkSupport.accepts(config.getConnectionConfig())) {
+            return HighGoSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(), table);
+        }
+        return JdbcCreateTableSqlResolver.resolve(
+                dialect,
+                config.getConnectionConfig(),
+                table);
     }
 
     private List<String> resolvePrimaryKeys(CatalogTable table) {
