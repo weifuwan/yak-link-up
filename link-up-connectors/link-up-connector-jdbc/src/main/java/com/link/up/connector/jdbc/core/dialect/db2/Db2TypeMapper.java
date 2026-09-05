@@ -242,10 +242,23 @@ public final class Db2TypeMapper implements JdbcTypeMapper {
     }
 
     private static String decimalType(Column column) {
-        int precision = column.getPrecision() == null
+        Integer precisionValue = column.getPrecision();
+        Integer scaleValue = column.getScale();
+
+        if (column.getDataType() instanceof DecimalType) {
+            DecimalType decimal = (DecimalType) column.getDataType();
+            if (precisionValue == null) {
+                precisionValue = decimal.getPrecision();
+            }
+            if (scaleValue == null) {
+                scaleValue = decimal.getScale();
+            }
+        }
+
+        int precision = precisionValue == null
                 ? MAX_DECIMAL_PRECISION
-                : column.getPrecision();
-        int scale = column.getScale() == null ? 0 : column.getScale();
+                : precisionValue;
+        int scale = scaleValue == null ? 0 : scaleValue;
 
         if (precision <= 0) {
             precision = MAX_DECIMAL_PRECISION;
