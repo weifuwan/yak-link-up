@@ -88,6 +88,11 @@
             <artifactId>opengauss-jdbc</artifactId>
             <version>6.0.3</version>
         </dependency>
+        <dependency>
+            <groupId>cn.com.kingbase</groupId>
+            <artifactId>kingbase8</artifactId>
+            <version>9.0.1.jre7</version>
+        </dependency>
     </dependencies>
 
 </project>

@@ -4,6 +4,7 @@ import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.connector.jdbc.catalog.dameng.DamengCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.db2.Db2CreateTableSqlBuilder;
+import com.link.up.connector.jdbc.catalog.kingbase.KingbaseCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlTypeMapper;
 import com.link.up.connector.jdbc.catalog.opengauss.OpenGaussCreateTableSqlBuilder;
@@ -17,6 +18,8 @@ import com.link.up.connector.jdbc.core.dialect.dameng.DamengJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.dameng.DamengTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.db2.Db2JdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.db2.Db2TypeMapper;
+import com.link.up.connector.jdbc.core.dialect.kingbase.KingbaseJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.kingbase.KingbaseTypeMapper;
 import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseCompatibleMode;
 import com.link.up.connector.jdbc.core.dialect.oceanbase.OceanBaseJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.opengauss.OpenGaussJdbcUrl;
@@ -170,6 +173,33 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.KINGBASE
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new KingbaseCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new KingbaseTypeMapper())
+                    .build();
+        }
+
         if (DatabaseIdentifier.ORACLE
                 .equalsIgnoreCase(
                         dialect.name())) {
@@ -293,6 +323,33 @@ final class JdbcCreateTableSqlResolver {
                 || tablePath == null) {
 
             return tablePath;
+        }
+
+        if (isKingbase(
+                connectionConfig)) {
+
+            String database =
+                    KingbaseJdbcUrl.databaseName(
+                            connectionConfig.getUrl());
+
+            if (!hasText(database)) {
+                return null;
+            }
+
+            String schema =
+                    resolveKingbaseSchema(
+                            connectionConfig,
+                            tablePath,
+                            database);
+
+            if (!hasText(schema)) {
+                return null;
+            }
+
+            return TablePath.of(
+                    database,
+                    schema,
+                    tablePath.getTableName());
         }
 
         if (isOpenGauss(
@@ -553,6 +610,54 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
+    private static String resolveKingbaseSchema(
+            JdbcConnectionConfig config,
+            TablePath tablePath,
+            String currentDatabase) {
+
+        String pathSchema =
+                tablePath.getSchemaName();
+
+        String pathDatabase =
+                tablePath.getDatabaseName();
+
+        if (hasText(pathSchema)
+                && (!hasText(pathDatabase)
+                || currentDatabase
+                .equalsIgnoreCase(
+                        pathDatabase))) {
+
+            return pathSchema.trim();
+        }
+
+        if (hasText(
+                config.getSchema())) {
+
+            return config.getSchema()
+                    .trim();
+        }
+
+        String currentSchema =
+                KingbaseJdbcUrl.currentSchema(
+                        config.getUrl(),
+                        config.getProperties());
+
+        if (hasText(currentSchema)) {
+            return currentSchema.trim();
+        }
+
+        if (hasText(
+                config.getUsername())) {
+
+            return config.getUsername()
+                    .trim()
+                    .toLowerCase(
+                            Locale.ROOT);
+        }
+
+        return "public";
+    }
+
     private static String resolveOpenGaussSchema(
             JdbcConnectionConfig config,
             TablePath tablePath,
@@ -754,6 +859,20 @@ final class JdbcCreateTableSqlResolver {
         return hasText(pathSchema)
                 ? pathSchema.trim()
                 : null;
+    }
+
+    private static boolean isKingbase(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.KINGBASE
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        return KingbaseJdbcUrl.accepts(
+                config.getUrl());
     }
 
     private static boolean isOpenGauss(
