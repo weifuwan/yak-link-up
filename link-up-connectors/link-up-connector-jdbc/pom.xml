@@ -83,6 +83,11 @@
             <artifactId>DmJdbcDriver18</artifactId>
             <version>8.1.3.140</version>
         </dependency>
+        <dependency>
+            <groupId>org.opengauss</groupId>
+            <artifactId>opengauss-jdbc</artifactId>
+            <version>6.0.3</version>
+        </dependency>
     </dependencies>
 
 </project>
