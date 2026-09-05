@@ -14,6 +14,7 @@ public final class DatabaseIdentifier {
     public static final String OCEANBASE = "oceanbase";
     public static final String DB2 = "db2";
     public static final String DAMENG = "dameng";
+    public static final String OPENGAUSS = "opengauss";
 
     private DatabaseIdentifier() {
     }
