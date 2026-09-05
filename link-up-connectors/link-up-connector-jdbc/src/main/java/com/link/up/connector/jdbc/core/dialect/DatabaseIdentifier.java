@@ -17,6 +17,7 @@ public final class DatabaseIdentifier {
     public static final String OPENGAUSS = "opengauss";
     public static final String KINGBASE = "kingbase";
     public static final String YASHANDB = "yashandb";
+    public static final String DUCKDB = "duckdb";
 
     private DatabaseIdentifier() {
     }

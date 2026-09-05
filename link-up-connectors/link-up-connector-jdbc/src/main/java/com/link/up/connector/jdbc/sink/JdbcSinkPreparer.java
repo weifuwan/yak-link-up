@@ -73,9 +73,7 @@ final class JdbcSinkPreparer implements SinkPreparer {
                 }
 
                 CatalogTable createDefinition = handler.getCreateTableDefinition();
-                TablePath ddlTargetPath = JdbcCreateTableSqlResolver.resolveTargetPath(
-                        config.getConnectionConfig(),
-                        createDefinition.getTablePath());
+                TablePath ddlTargetPath = resolveTargetPath(createDefinition.getTablePath());
                 boolean executed = handler.isTableCreated();
                 String reason = executed
                         ? TableDdl.REASON_TARGET_TABLE_CREATED
@@ -89,10 +87,7 @@ final class JdbcSinkPreparer implements SinkPreparer {
                         ddlTargetPath == null
                                 ? target.getTablePath().toString()
                                 : ddlTargetPath.toString(),
-                        JdbcCreateTableSqlResolver.resolve(
-                                dialect,
-                                config.getConnectionConfig(),
-                                createDefinition),
+                        resolveCreateTableSql(createDefinition),
                         executed,
                         executed ? TableDdl.STATUS_SUCCEEDED : TableDdl.STATUS_SKIPPED,
                         reason,
@@ -115,12 +110,28 @@ final class JdbcSinkPreparer implements SinkPreparer {
         CatalogTable mapped = path == null
                 ? source
                 : source.withPath(dialect.parseTablePath(path));
-        TablePath targetPath = JdbcCreateTableSqlResolver.resolveTargetPath(
-                config.getConnectionConfig(),
-                mapped.getTablePath());
+        TablePath targetPath = resolveTargetPath(mapped.getTablePath());
         return targetPath == null || mapped.getTablePath().equals(targetPath)
                 ? mapped
                 : mapped.withPath(targetPath);
+    }
+
+    private TablePath resolveTargetPath(TablePath tablePath) {
+        return DuckDbSinkSupport.accepts(config.getConnectionConfig())
+                ? DuckDbSinkSupport.resolveTargetPath(
+                        config.getConnectionConfig(), tablePath)
+                : JdbcCreateTableSqlResolver.resolveTargetPath(
+                        config.getConnectionConfig(), tablePath);
+    }
+
+    private String resolveCreateTableSql(CatalogTable table) {
+        return DuckDbSinkSupport.accepts(config.getConnectionConfig())
+                ? DuckDbSinkSupport.resolveCreateTableSql(
+                        config.getConnectionConfig(), table)
+                : JdbcCreateTableSqlResolver.resolve(
+                        dialect,
+                        config.getConnectionConfig(),
+                        table);
     }
 
     private List<String> resolvePrimaryKeys(CatalogTable table) {
