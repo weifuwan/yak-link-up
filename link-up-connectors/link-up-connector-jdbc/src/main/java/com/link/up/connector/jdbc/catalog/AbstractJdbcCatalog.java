@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 
@@ -39,9 +40,27 @@ public abstract class AbstractJdbcCatalog
 
     private volatile boolean opened;
 
+    /**
+     * 保留 MySQL 默认行为，已有 MySQL Catalog 无需改动。
+     */
     protected AbstractJdbcCatalog(
             String catalogName,
             JdbcCatalogConfig config) {
+
+        this(
+                catalogName,
+                config,
+                JdbcUrlInfo.parseMySql(
+                        config.getUrl()));
+    }
+
+    /**
+     * 新数据库可以提供自己的 JDBC URL 解析结果，复用公共 Catalog 生命周期。
+     */
+    protected AbstractJdbcCatalog(
+            String catalogName,
+            JdbcCatalogConfig config,
+            JdbcUrlInfo urlInfo) {
 
         if (catalogName == null
                 || catalogName.trim().isEmpty()) {
@@ -50,10 +69,18 @@ public abstract class AbstractJdbcCatalog
                     "catalogName must not be empty");
         }
 
-        this.catalogName = catalogName.trim();
-        this.config = config;
+        this.catalogName =
+                catalogName.trim();
+
+        this.config =
+                Objects.requireNonNull(
+                        config,
+                        "config must not be null");
+
         this.urlInfo =
-                JdbcUrlInfo.parseMySql(config.getUrl());
+                Objects.requireNonNull(
+                        urlInfo,
+                        "urlInfo must not be null");
     }
 
     protected static String quoteIdentifier(
@@ -81,13 +108,19 @@ public abstract class AbstractJdbcCatalog
                 tablePath.getTableName());
     }
 
-    private static String normalize(String value) {
+    private static String normalize(
+            String value) {
+
         if (value == null) {
             return null;
         }
 
-        String normalized = value.trim();
-        return normalized.isEmpty() ? null : normalized;
+        String normalized =
+                value.trim();
+
+        return normalized.isEmpty()
+                ? null
+                : normalized;
     }
 
     @Override
@@ -112,11 +145,13 @@ public abstract class AbstractJdbcCatalog
         loadDriver();
 
         try (Connection connection =
-                     newConnection(config.getUrl())) {
+                     newConnection(
+                             config.getUrl())) {
 
             if (!connection.isValid(5)) {
                 throw new CatalogException(
-                        "JDBC Catalog 连接校验失败：" + config.getUrl());
+                        "JDBC Catalog 连接校验失败："
+                                + config.getUrl());
             }
 
             opened = true;
@@ -128,7 +163,8 @@ public abstract class AbstractJdbcCatalog
 
         } catch (SQLException e) {
             throw new CatalogException(
-                    "JDBC Catalog 连接失败：" + config.getUrl(),
+                    "JDBC Catalog 连接失败："
+                            + config.getUrl(),
                     e);
         }
     }
@@ -153,24 +189,24 @@ public abstract class AbstractJdbcCatalog
             throws SQLException {
 
         checkOpened();
-        return newConnection(config.getUrl());
+
+        return newConnection(
+                config.getUrl());
     }
 
     /**
      * 创建不指定数据库的连接。
-     * <p>
-     * 主要用于：
-     * <p>
-     * 1. 查询数据库列表；
-     * 2. 创建数据库；
-     * 3. 删除数据库；
-     * 4. 查询 information_schema。
+     *
+     * <p>MySQL 主要用于数据库管理。其他数据库如果不支持无数据库 URL，
+     * 可以在自己的 Catalog 中使用 openDefaultConnection/openDatabaseConnection。
      */
     protected final Connection openRootConnection()
             throws SQLException {
 
         checkOpened();
-        return newConnection(urlInfo.getRootUrl());
+
+        return newConnection(
+                urlInfo.getRootUrl());
     }
 
     /**
@@ -183,38 +219,42 @@ public abstract class AbstractJdbcCatalog
         checkOpened();
 
         return newConnection(
-                urlInfo.buildDatabaseUrl(databaseName));
+                urlInfo.buildDatabaseUrl(
+                        databaseName));
     }
 
     protected final String getDatabaseUrl(
             String databaseName) {
 
-        return urlInfo.buildDatabaseUrl(databaseName);
+        return urlInfo.buildDatabaseUrl(
+                databaseName);
     }
 
     /**
      * 获取 TablePath 中的数据库。
      * <p>
      * 如果没有显式指定，则使用 JDBC URL 中的默认数据库。
+     *
+     * <p>该方法保留 MySQL database/schema 兼容语义；
+     * 使用独立 Schema 的数据库应在自身 Catalog 中规范化 TablePath。
      */
     protected final String resolveDatabase(
             TablePath tablePath) {
 
         String databaseName =
-                normalize(tablePath.getDatabaseName());
+                normalize(
+                        tablePath.getDatabaseName());
 
-        /*
-         * MySQL 中 database 和 schema 是同一个概念。
-         * 为兼容使用 schemaName 的调用方，这里允许使用 schemaName。
-         */
         if (databaseName == null) {
             databaseName =
-                    normalize(tablePath.getSchemaName());
+                    normalize(
+                            tablePath.getSchemaName());
         }
 
         if (databaseName == null) {
             databaseName =
-                    normalize(urlInfo.getDefaultDatabase());
+                    normalize(
+                            urlInfo.getDefaultDatabase());
         }
 
         if (databaseName == null) {
@@ -234,7 +274,8 @@ public abstract class AbstractJdbcCatalog
             TablePath tablePath) {
 
         return TablePath.of(
-                resolveDatabase(tablePath),
+                resolveDatabase(
+                        tablePath),
                 tablePath.getTableName());
     }
 
@@ -246,10 +287,13 @@ public abstract class AbstractJdbcCatalog
             String sql)
             throws SQLException {
 
-        log.info("执行 Catalog SQL：{}", sql);
+        log.info(
+                "执行 Catalog SQL：{}",
+                sql);
 
         try (PreparedStatement statement =
-                     connection.prepareStatement(sql)) {
+                     connection.prepareStatement(
+                             sql)) {
 
             statement.execute();
         }
@@ -276,10 +320,12 @@ public abstract class AbstractJdbcCatalog
         }
 
         try {
-            Class.forName(driverClass);
+            Class.forName(
+                    driverClass);
         } catch (ClassNotFoundException e) {
             throw new CatalogException(
-                    "找不到 JDBC Driver：" + driverClass,
+                    "找不到 JDBC Driver："
+                            + driverClass,
                     e);
         }
     }
@@ -293,6 +339,9 @@ public abstract class AbstractJdbcCatalog
 
     /**
      * JDBC URL 解析结果。
+     *
+     * <p>当前为 MySQL 和 PostgreSQL 的 network-style JDBC URL 提供解析；
+     * Oracle 等 URL 形态不同的数据库应增加自己的解析入口。
      */
     protected static final class JdbcUrlInfo {
 
@@ -313,11 +362,35 @@ public abstract class AbstractJdbcCatalog
         public static JdbcUrlInfo parseMySql(
                 String jdbcUrl) {
 
+            return parseNetworkUrl(
+                    jdbcUrl,
+                    "jdbc:mysql://",
+                    "MySQL");
+        }
+
+        public static JdbcUrlInfo parsePostgres(
+                String jdbcUrl) {
+
+            return parseNetworkUrl(
+                    jdbcUrl,
+                    "jdbc:postgresql://",
+                    "PostgreSQL");
+        }
+
+        private static JdbcUrlInfo parseNetworkUrl(
+                String jdbcUrl,
+                String prefix,
+                String databaseName) {
+
             if (jdbcUrl == null
-                    || !jdbcUrl.startsWith("jdbc:mysql://")) {
+                    || !jdbcUrl.startsWith(
+                    prefix)) {
 
                 throw new IllegalArgumentException(
-                        "非法 MySQL JDBC URL：" + jdbcUrl);
+                        "非法 "
+                                + databaseName
+                                + " JDBC URL："
+                                + jdbcUrl);
             }
 
             int queryIndex =
@@ -325,19 +398,24 @@ public abstract class AbstractJdbcCatalog
 
             String mainUrl =
                     queryIndex >= 0
-                            ? jdbcUrl.substring(0, queryIndex)
+                            ? jdbcUrl.substring(
+                            0,
+                            queryIndex)
                             : jdbcUrl;
 
             String suffix =
                     queryIndex >= 0
-                            ? jdbcUrl.substring(queryIndex)
+                            ? jdbcUrl.substring(
+                            queryIndex)
                             : "";
 
             int hostStart =
-                    "jdbc:mysql://".length();
+                    prefix.length();
 
             int databaseSeparator =
-                    mainUrl.indexOf('/', hostStart);
+                    mainUrl.indexOf(
+                            '/',
+                            hostStart);
 
             if (databaseSeparator < 0) {
                 return new JdbcUrlInfo(
@@ -377,7 +455,8 @@ public abstract class AbstractJdbcCatalog
                 String databaseName) {
 
             if (databaseName == null
-                    || databaseName.trim().isEmpty()) {
+                    || databaseName.trim()
+                    .isEmpty()) {
 
                 return getRootUrl();
             }

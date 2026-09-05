@@ -4,11 +4,15 @@ import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.catalog.mysql.MySqlTypeMapper;
+import com.link.up.connector.jdbc.catalog.postgres.PostgresCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
+import com.link.up.connector.jdbc.core.dialect.postgres.PostgresTypeMapper;
 
-/** Generates the CREATE TABLE statement used for offline sink preparation. */
+/**
+ * Generates the CREATE TABLE statement used for offline sink preparation.
+ */
 final class JdbcCreateTableSqlResolver {
 
     private JdbcCreateTableSqlResolver() {
@@ -22,21 +26,13 @@ final class JdbcCreateTableSqlResolver {
         if (dialect == null
                 || connectionConfig == null
                 || table == null) {
+
             return null;
         }
 
-        /*
-         * MySqlDialect#typeMapper() returns the runtime mapper from
-         * core.dialect.mysql, while MySqlCreateTableSqlBuilder intentionally
-         * uses the catalog mapper from catalog.mysql. They are different
-         * classes with the same simple name and cannot be cast to each other.
-         *
-         * Use the dialect identifier to select the matching catalog DDL
-         * builder, and construct the same mapper configuration used by
-         * MySqlDialect#createCatalog().
-         */
-        if (DatabaseIdentifier.MYSQL.equalsIgnoreCase(
-                dialect.name())) {
+        if (DatabaseIdentifier.MYSQL
+                .equalsIgnoreCase(
+                        dialect.name())) {
 
             TablePath targetPath =
                     resolveTargetPath(
@@ -48,9 +44,11 @@ final class JdbcCreateTableSqlResolver {
             }
 
             CatalogTable ddlTable =
-                    table.getTablePath().equals(targetPath)
+                    table.getTablePath()
+                            .equals(targetPath)
                             ? table
-                            : table.withPath(targetPath);
+                            : table.withPath(
+                                    targetPath);
 
             return new MySqlCreateTableSqlBuilder(
                     targetPath,
@@ -59,8 +57,35 @@ final class JdbcCreateTableSqlResolver {
                     .build();
         }
 
+        if (DatabaseIdentifier.POSTGRESQL
+                .equalsIgnoreCase(
+                        dialect.name())) {
+
+            TablePath targetPath =
+                    resolveTargetPath(
+                            connectionConfig,
+                            table.getTablePath());
+
+            if (targetPath == null) {
+                return null;
+            }
+
+            CatalogTable ddlTable =
+                    table.getTablePath()
+                            .equals(targetPath)
+                            ? table
+                            : table.withPath(
+                                    targetPath);
+
+            return new PostgresCreateTableSqlBuilder(
+                    targetPath,
+                    ddlTable,
+                    new PostgresTypeMapper())
+                    .build();
+        }
+
         /*
-         * Future JDBC dialects can add their own CREATE TABLE builder here
+         * Future JDBC dialects can add their CREATE TABLE builder here
          * without changing the connector-neutral protocol.
          */
         return null;
@@ -70,11 +95,44 @@ final class JdbcCreateTableSqlResolver {
             JdbcConnectionConfig connectionConfig,
             TablePath tablePath) {
 
-        if (connectionConfig == null || tablePath == null) {
+        if (connectionConfig == null
+                || tablePath == null) {
+
             return tablePath;
         }
 
-        if (hasText(tablePath.getDatabaseName())) {
+        if (isPostgres(
+                connectionConfig)) {
+
+            String database =
+                    databaseFromUrl(
+                            connectionConfig.getUrl());
+
+            if (!hasText(database)) {
+                return null;
+            }
+
+            String schema =
+                    tablePath.getSchemaName();
+
+            if (!hasText(schema)) {
+                schema =
+                        connectionConfig.getSchema();
+            }
+
+            if (!hasText(schema)) {
+                schema = "public";
+            }
+
+            return TablePath.of(
+                    database,
+                    schema,
+                    tablePath.getTableName());
+        }
+
+        if (hasText(
+                tablePath.getDatabaseName())) {
+
             return tablePath;
         }
 
@@ -82,8 +140,9 @@ final class JdbcCreateTableSqlResolver {
                 connectionConfig.getSchema();
 
         if (!hasText(database)) {
-            database = databaseFromUrl(
-                    connectionConfig.getUrl());
+            database =
+                    databaseFromUrl(
+                            connectionConfig.getUrl());
         }
 
         if (!hasText(database)) {
@@ -95,39 +154,98 @@ final class JdbcCreateTableSqlResolver {
                 tablePath.getTableName());
     }
 
-    private static String databaseFromUrl(String url) {
+    private static boolean isPostgres(
+            JdbcConnectionConfig config) {
+
+        if (DatabaseIdentifier.POSTGRESQL
+                .equalsIgnoreCase(
+                        config.getDialect())) {
+
+            return true;
+        }
+
+        String url =
+                config.getUrl();
+
+        return url != null
+                && url.trim()
+                .toLowerCase()
+                .startsWith(
+                        "jdbc:postgresql:");
+    }
+
+    private static String databaseFromUrl(
+            String url) {
+
         if (!hasText(url)) {
             return null;
         }
 
-        String normalized = url.trim();
-        int protocolSeparator = normalized.indexOf("://");
+        String normalized =
+                url.trim();
+
+        int protocolSeparator =
+                normalized.indexOf(
+                        "://");
+
         if (protocolSeparator < 0) {
             return null;
         }
 
-        int databaseStart = normalized.indexOf('/', protocolSeparator + 3);
-        if (databaseStart < 0 || databaseStart == normalized.length() - 1) {
+        int databaseStart =
+                normalized.indexOf(
+                        '/',
+                        protocolSeparator + 3);
+
+        if (databaseStart < 0
+                || databaseStart
+                == normalized.length() - 1) {
+
             return null;
         }
 
-        int databaseEnd = normalized.length();
-        int queryStart = normalized.indexOf('?', databaseStart + 1);
+        int databaseEnd =
+                normalized.length();
+
+        int queryStart =
+                normalized.indexOf(
+                        '?',
+                        databaseStart + 1);
+
         if (queryStart >= 0) {
-            databaseEnd = queryStart;
-        }
-        int fragmentStart = normalized.indexOf('#', databaseStart + 1);
-        if (fragmentStart >= 0 && fragmentStart < databaseEnd) {
-            databaseEnd = fragmentStart;
+            databaseEnd =
+                    queryStart;
         }
 
-        String database = normalized.substring(
-                databaseStart + 1,
-                databaseEnd).trim();
-        return hasText(database) ? database : null;
+        int fragmentStart =
+                normalized.indexOf(
+                        '#',
+                        databaseStart + 1);
+
+        if (fragmentStart >= 0
+                && fragmentStart
+                < databaseEnd) {
+
+            databaseEnd =
+                    fragmentStart;
+        }
+
+        String database =
+                normalized.substring(
+                        databaseStart + 1,
+                        databaseEnd)
+                        .trim();
+
+        return hasText(database)
+                ? database
+                : null;
     }
 
-    private static boolean hasText(String value) {
-        return value != null && !value.trim().isEmpty();
+    private static boolean hasText(
+            String value) {
+
+        return value != null
+                && !value.trim()
+                .isEmpty();
     }
 }
