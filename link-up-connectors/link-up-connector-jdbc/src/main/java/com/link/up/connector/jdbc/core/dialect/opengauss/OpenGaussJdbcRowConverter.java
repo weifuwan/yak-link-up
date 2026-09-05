@@ -41,8 +41,6 @@ public final class OpenGaussJdbcRowConverter extends AbstractJdbcRowConverter {
 
         if (column.getDataType().getSqlType() == SqlType.STRING
                 && requiresOtherBinding(column.getSourceType())) {
-            // Send an OTHER parameter so openGauss resolves the native target
-            // type without forcing an intermediate JDBC primitive conversion.
             statement.setObject(index, String.valueOf(value), Types.OTHER);
             return;
         }
@@ -61,7 +59,7 @@ public final class OpenGaussJdbcRowConverter extends AbstractJdbcRowConverter {
                 || "cidr".equals(base)
                 || base.startsWith("macaddr")
                 || "timetz".equals(base)
-                || "time with time zone".equals(type)
+                || (type.startsWith("time") && type.contains("time zone"))
                 || "numeric".equals(base)
                 || "decimal".equals(base)
                 || "dec".equals(base)
