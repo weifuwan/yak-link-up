@@ -47,12 +47,29 @@ public class OpenGaussTypeMapperTest {
     }
 
     @Test
+    public void tinyintUsesShortToPreserveUnsignedUint8Values() {
+        assertEquals(
+                BasicType.SHORT_TYPE,
+                mapper.mapType(Types.TINYINT, "TINYINT", 3, 0));
+        assertEquals(
+                BasicType.SHORT_TYPE,
+                mapper.mapType(Types.OTHER, "INT1", 3, 0));
+    }
+
+    @Test
     public void timeWithTimezoneKeepsOffsetAsText() {
         assertEquals(
                 BasicType.STRING_TYPE,
                 mapper.mapType(
                         Types.TIME_WITH_TIMEZONE,
                         "TIME WITH TIME ZONE",
+                        0,
+                        6));
+        assertEquals(
+                BasicType.STRING_TYPE,
+                mapper.mapType(
+                        Types.TIME_WITH_TIMEZONE,
+                        "TIME(6) WITH TIME ZONE",
                         0,
                         6));
     }
@@ -64,6 +81,13 @@ public class OpenGaussTypeMapperTest {
                 mapper.mapType(
                         Types.TIMESTAMP_WITH_TIMEZONE,
                         "TIMESTAMP WITH TIME ZONE",
+                        0,
+                        6));
+        assertEquals(
+                BasicType.TIMESTAMP_TZ_TYPE,
+                mapper.mapType(
+                        Types.TIMESTAMP_WITH_TIMEZONE,
+                        "TIMESTAMP(6) WITH TIME ZONE",
                         0,
                         6));
     }
