@@ -1,0 +1,376 @@
+package com.link.up.connector.jdbc.catalog.oracle;
+
+import com.link.up.api.table.catalog.CatalogTable;
+import com.link.up.api.table.catalog.Column;
+import com.link.up.api.table.catalog.PrimaryKey;
+import com.link.up.api.table.catalog.TablePath;
+import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.type.SqlType;
+import com.link.up.connector.jdbc.core.dialect.oracle.OracleTypeMapper;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+/**
+ * Oracle CREATE TABLE builder used during offline Sink preparation.
+ *
+ * <p>The first stage intentionally keeps DDL small: columns, defaults,
+ * identity, NOT NULL, primary key and comments. Tablespaces, PCTFREE,
+ * secondary indexes and runtime schema events are outside this adapter.</p>
+ */
+public final class OracleCreateTableSqlBuilder {
+
+    private static final Pattern NUMBER_PATTERN =
+            Pattern.compile(
+                    "[-+]?\\d+(\\.\\d+)?");
+
+    private final TablePath tablePath;
+    private final CatalogTable catalogTable;
+    private final OracleTypeMapper typeMapper;
+
+    public OracleCreateTableSqlBuilder(
+            TablePath tablePath,
+            CatalogTable catalogTable,
+            OracleTypeMapper typeMapper) {
+
+        this.tablePath = tablePath;
+        this.catalogTable = catalogTable;
+        this.typeMapper = typeMapper;
+    }
+
+    public String build() {
+        return buildStatements()
+                .stream()
+                .map(
+                        sql ->
+                                sql.endsWith(";")
+                                        ? sql
+                                        : sql + ";")
+                .collect(
+                        Collectors.joining(
+                                "\n"));
+    }
+
+    public List<String> buildStatements() {
+        TableSchema schema =
+                catalogTable.getTableSchema();
+
+        boolean preserveSourceType =
+                OracleCatalog.DIALECT
+                        .equalsIgnoreCase(
+                                catalogTable
+                                        .getOptions()
+                                        .get(
+                                                OracleCatalog
+                                                        .TABLE_OPTION_DIALECT));
+
+        List<String> definitions =
+                new ArrayList<String>();
+
+        for (Column column :
+                schema.getColumns()) {
+
+            definitions.add(
+                    buildColumnDefinition(
+                            column,
+                            preserveSourceType));
+        }
+
+        PrimaryKey primaryKey =
+                schema.getPrimaryKey();
+
+        if (primaryKey != null) {
+            definitions.add(
+                    buildPrimaryKey(
+                            primaryKey));
+        }
+
+        String createSql =
+                "CREATE TABLE "
+                        + quoteTable(
+                        tablePath)
+                        + " (\n    "
+                        + String.join(
+                        ",\n    ",
+                        definitions)
+                        + "\n)";
+
+        List<String> statements =
+                new ArrayList<String>();
+
+        statements.add(
+                createSql);
+
+        if (hasText(
+                catalogTable.getComment())) {
+
+            statements.add(
+                    "COMMENT ON TABLE "
+                            + quoteTable(
+                            tablePath)
+                            + " IS '"
+                            + escapeLiteral(
+                            catalogTable.getComment())
+                            + "'");
+        }
+
+        for (Column column :
+                schema.getColumns()) {
+
+            if (!hasText(
+                    column.getComment())) {
+                continue;
+            }
+
+            statements.add(
+                    "COMMENT ON COLUMN "
+                            + quoteTable(
+                            tablePath)
+                            + "."
+                            + quoteIdentifier(
+                            column.getName())
+                            + " IS '"
+                            + escapeLiteral(
+                            column.getComment())
+                            + "'");
+        }
+
+        return statements;
+    }
+
+    public String buildColumnDefinition(
+            Column column,
+            boolean preserveSourceType) {
+
+        List<String> parts =
+                new ArrayList<String>();
+
+        parts.add(
+                quoteIdentifier(
+                        column.getName()));
+
+        parts.add(
+                typeMapper.toDatabaseType(
+                        column,
+                        preserveSourceType));
+
+        if (column.isAutoIncrement()) {
+            parts.add(
+                    "GENERATED BY DEFAULT AS IDENTITY");
+        } else if (column.getDefaultValue()
+                != null) {
+
+            parts.add(
+                    "DEFAULT "
+                            + formatDefaultValue(
+                            column,
+                            preserveSourceType));
+        }
+
+        if (!column.isNullable()) {
+            parts.add(
+                    "NOT NULL");
+        }
+
+        return String.join(
+                " ",
+                parts);
+    }
+
+    private String buildPrimaryKey(
+            PrimaryKey primaryKey) {
+
+        String constraintName =
+                primaryKey.getName();
+
+        if (!hasText(
+                constraintName)) {
+
+            constraintName =
+                    "PK_"
+                            + tablePath
+                            .getTableName();
+        }
+
+        constraintName =
+                normalizeConstraintName(
+                        constraintName);
+
+        String columns =
+                primaryKey.getColumnNames()
+                        .stream()
+                        .map(
+                                OracleCreateTableSqlBuilder
+                                        ::quoteIdentifier)
+                        .collect(
+                                Collectors.joining(
+                                        ", "));
+
+        return "CONSTRAINT "
+                + quoteIdentifier(
+                constraintName)
+                + " PRIMARY KEY ("
+                + columns
+                + ")";
+    }
+
+    private String formatDefaultValue(
+            Column column,
+            boolean preserveSourceType) {
+
+        Object value =
+                column.getDefaultValue();
+
+        if (preserveSourceType) {
+            String expression =
+                    String.valueOf(
+                            value)
+                            .trim();
+
+            if (hasText(
+                    expression)) {
+
+                return expression;
+            }
+        }
+
+        if (value instanceof Number) {
+            return value.toString();
+        }
+
+        if (value instanceof Boolean) {
+            return (Boolean) value
+                    ? "1"
+                    : "0";
+        }
+
+        String text =
+                String.valueOf(
+                        value)
+                        .trim();
+
+        String upper =
+                text.toUpperCase(
+                        Locale.ROOT);
+
+        if ("NULL".equals(upper)
+                || "CURRENT_DATE".equals(upper)
+                || upper.startsWith(
+                "CURRENT_TIMESTAMP")
+                || "SYSDATE".equals(upper)
+                || "SYSTIMESTAMP".equals(upper)
+                || "SYS_GUID()".equals(upper)
+                || upper.endsWith(
+                ".NEXTVAL")) {
+
+            return text;
+        }
+
+        SqlType sqlType =
+                column.getDataType()
+                        .getSqlType();
+
+        if (isNumeric(
+                sqlType)
+                && NUMBER_PATTERN
+                .matcher(text)
+                .matches()) {
+
+            return text;
+        }
+
+        return "'"
+                + escapeLiteral(
+                text)
+                + "'";
+    }
+
+    private static boolean isNumeric(
+            SqlType sqlType) {
+
+        return sqlType
+                == SqlType.TINYINT
+                || sqlType
+                == SqlType.SMALLINT
+                || sqlType
+                == SqlType.INT
+                || sqlType
+                == SqlType.BIGINT
+                || sqlType
+                == SqlType.FLOAT
+                || sqlType
+                == SqlType.DOUBLE
+                || sqlType
+                == SqlType.DECIMAL;
+    }
+
+    private static String normalizeConstraintName(
+            String value) {
+
+        String normalized =
+                value.trim()
+                        .replaceAll(
+                                "[^A-Za-z0-9_$#]",
+                                "_");
+
+        if (normalized.length() > 30) {
+            normalized =
+                    normalized.substring(
+                            0,
+                            30);
+        }
+
+        return normalized;
+    }
+
+    private static String quoteTable(
+            TablePath tablePath) {
+
+        if (!hasText(
+                tablePath.getSchemaName())) {
+
+            throw new IllegalArgumentException(
+                    "Oracle CREATE TABLE 需要 schema："
+                            + tablePath);
+        }
+
+        return quoteIdentifier(
+                tablePath.getSchemaName())
+                + "."
+                + quoteIdentifier(
+                tablePath.getTableName());
+    }
+
+    private static String quoteIdentifier(
+            String value) {
+
+        if (!hasText(value)) {
+            throw new IllegalArgumentException(
+                    "identifier must not be empty");
+        }
+
+        return "\""
+                + value.trim()
+                .replace("\"", "\"\"")
+                + "\"";
+    }
+
+    private static String escapeLiteral(
+            String value) {
+
+        return value.replace(
+                "'",
+                "''");
+    }
+
+    private static boolean hasText(
+            String value) {
+
+        return value != null
+                && !value.trim()
+                .isEmpty();
+    }
+}

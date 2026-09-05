@@ -4,7 +4,7 @@ Yak Link Up 优先复用已有执行模型，再增加数据库差异层。新�
 
 ## JDBC 数据库适配
 
-以 MySQL、PostgreSQL 为参考，一个新的 JDBC 数据库通常只需要补齐：
+以 MySQL、PostgreSQL、Oracle 为参考，一个新的 JDBC 数据库通常只需要补齐：
 
 1. **Driver**
    - 在 `link-up-connector-jdbc` 引入 JDBC Driver。
@@ -33,8 +33,12 @@ Yak Link Up 优先复用已有执行模型，再增加数据库差异层。新�
    - CREATE TABLE。
    - 确认已有数据库方言没有回归。
 
+## 数据库差异不要强行抹平
+
+适配时保留真正影响正确性的差异。例如 PostgreSQL cursor fetch 需要事务，Oracle `DATE` 包含时分秒、UPSERT 使用 `MERGE`，Oracle SQL 对象定位是 `schema.table`。这些差异应放在 Dialect/TypeMapper/Catalog 中，而不是塞进公共 Source/Sink。
+
 ## 能力边界
 
 JDBC Offline Connector 默认只负责全量读取、分片读取和批量写入。
 
-CDC、Binlog/WAL、LSN、Replication Slot、流式 Checkpoint、XA / Exactly Once 等能力应作为独立 Stage 设计，不直接塞进离线 JDBC 方言。这样新增 Oracle、SQL Server 等数据库时，只需要实现数据库差异，而不需要重复执行框架。
+CDC、Binlog/WAL、Oracle LogMiner/SCN、Replication Slot、流式 Checkpoint、XA / Exactly Once 等能力应作为独立 Stage 设计，不直接塞进离线 JDBC 方言。这样新增 SQL Server、DB2 等数据库时，只需要实现数据库差异，而不需要重复执行框架。
