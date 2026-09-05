@@ -21,6 +21,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -514,8 +515,8 @@ public final class XuguCatalog implements WritableCatalog {
 
     private static void execute(Connection connection, String sql)
             throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.execute();
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
         }
     }
 
