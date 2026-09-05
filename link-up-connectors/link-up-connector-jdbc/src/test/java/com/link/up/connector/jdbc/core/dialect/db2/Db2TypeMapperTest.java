@@ -22,6 +22,12 @@ public class Db2TypeMapperTest {
         assertEquals("DECIMAL(31,10)", mapper.toDatabaseType(column));
     }
 
+    @Test
+    public void fallsBackToDecimalTypePrecisionWhenColumnMetadataIsAbsent() {
+        Column column = Column.builder("amount", new DecimalType(20, 6)).build();
+        assertEquals("DECIMAL(20,6)", mapper.toDatabaseType(column));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsDecimalPrecisionAboveDb2LimitInsteadOfTruncatingScale() {
         Column column = Column.builder("amount", new DecimalType(38, 10))
@@ -29,6 +35,12 @@ public class Db2TypeMapperTest {
                 .scale(10)
                 .build();
         mapper.toDatabaseType(column);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsIntrinsicDecimalPrecisionAboveDb2Limit() {
+        mapper.toDatabaseType(
+                Column.builder("amount", new DecimalType(38, 10)).build());
     }
 
     @Test
