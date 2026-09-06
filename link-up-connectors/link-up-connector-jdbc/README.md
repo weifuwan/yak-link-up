@@ -99,8 +99,8 @@ GBase is modeled as a database family, not as one generic JDBC dialect. The stab
 `gbase8a` and `gbase8s`. A generic `gbase` dialect is intentionally not defined because the three products use different
 JDBC protocols and database semantics.
 
-The family scaffold only provides stable product metadata and family-level helpers. It deliberately does **not** register
-`JdbcDialectFactory` implementations yet, so these identifiers do not advertise runtime support before their concrete
+The shared `gbase/common` layer only carries stable product metadata and family-level helpers. GBase 8c now has its first
+runtime stage; the `gbase8a` and `gbase8s` identities remain reserved without a `JdbcDialectFactory` until their concrete
 URL, driver, catalog, type-mapping and SQL behavior is implemented and tested.
 
 Shared GBase code must remain product-neutral. Driver names, JDBC URL parsing, identifier rules, catalog behavior, type
@@ -111,8 +111,38 @@ least two completed adapters prove the behavior is genuinely common. The planned
 2. GBase 8a Source, then existing-table JDBC Sink; native/high-speed MPP loading is a later stage.
 3. GBase 8s Source, then existing-table Sink.
 
-CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths are outside
-this scaffold.
+CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths stay outside
+the family scaffold.
+
+### GBase 8c bounded Source
+
+GBase 8c is exposed as the dedicated `gbase8c` JDBC dialect. The canonical Stage 1 path uses the GBase 8c JDBC protocol
+and driver instead of pretending that a PostgreSQL or MySQL URL uniquely identifies the product:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:gbase8c://gbase8c:5432/app"
+  driver = "com.gbase8c.Driver"
+  dialect = "gbase8c"
+  schema = "public"
+  table_path = "public.orders"
+}
+```
+
+Stage 1 reuses the proven PostgreSQL-compatible **read-side type contract** while keeping its own URL parser, dialect,
+row converter and read-only Catalog. Metadata discovery uses `pg_catalog` / `information_schema` semantics for databases,
+schemas, tables, columns and primary keys. The JDBC URL owns the active database; `schema.table` is the normal table
+path, and an explicit `database.schema.table` is accepted only when the database matches the one in the JDBC URL. This
+prevents metadata from one database being paired with data read through another connection URL.
+
+The source supports bounded single-table and multi-table jobs, custom query reads and the shared safe JDBC partition
+planner. Stage 1 advertises `BEST_EFFORT` consistency only. It deliberately does not implement `WritableCatalog`, Sink
+DDL, INSERT/UPSERT, automatic table creation, CDC, streaming checkpoints, coordinated database snapshots, or Oracle /
+MySQL / Teradata compatibility-mode expansion. Those remain product-specific follow-up stages.
+
+The dedicated GBase 8c JDBC driver is not guessed as a Maven dependency by this module. Deployments must place the vendor
+JDBC driver on the runtime classpath and configure `driver = "com.gbase8c.Driver"` explicitly.
 
 ## SAP HANA
 
