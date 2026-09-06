@@ -61,9 +61,9 @@ contract.
 
 ## SAP HANA
 
-SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. Stage 1 is deliberately
-source-only: it provides bounded reads, schema/table metadata discovery, custom SQL projection, common HANA type mapping
-and the shared safe JDBC split planner. It does not enable HANA sink DDL, INSERT/UPSERT, CDC, SLT or streaming semantics.
+SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. The adapter remains strictly
+offline/bounded: Stage 1 provides Source and metadata discovery; Stage 2 adds the shared JDBC batch Sink, automatic table
+DDL and primary-key MERGE UPSERT. CDC, SAP SLT and streaming semantics remain out of scope.
 
 ```hocon
 source {
@@ -73,16 +73,32 @@ source {
   schema = "SALES"
   table_path = "SALES.ORDERS"
 }
+
+sink {
+  type = "jdbc"
+  url = "jdbc:sap://hana:30013/?databaseName=HXE"
+  driver = "com.sap.db.jdbc.Driver"
+  schema = "ARCHIVE"
+  table_path = "ARCHIVE.ORDERS"
+  write_mode = "UPSERT"
+  primary_keys = ["ID"]
+}
 ```
 
 HANA SQL identifiers use `schema.table`; the database/tenant is selected by the JDBC connection. Unquoted `table_path`
 parts are normalized to HANA's uppercase identifier semantics, while quoted identifiers preserve case. The connector
 `schema` option is applied as the JDBC `currentSchema` default unless the URL or explicit JDBC properties already set
-`currentSchema`.
+`currentSchema`. Cross-database Sink planning prefers the HANA target connection schema instead of leaking a source
+schema into the target.
 
-The Stage 1 type contract covers BOOLEAN, integer types, SMALLDECIMAL/DECIMAL, REAL/DOUBLE, VARCHAR/NVARCHAR and common
-text/LOB types, DATE/TIME/SECONDDATE/TIMESTAMP, and binary/BLOB types. ARRAY and spatial `ST_POINT`/`ST_GEOMETRY` are
-rejected explicitly instead of being silently coerced.
+The type contract covers BOOLEAN, integer types, SMALLDECIMAL/DECIMAL, REAL/DOUBLE, VARCHAR/NVARCHAR and common
+text/LOB types, DATE/TIME/SECONDDATE/TIMESTAMP, and binary/BLOB types. HANA-to-HANA table copies preserve supported
+native source types where safe; cross-database writes map strings to NVARCHAR/NCLOB and bytes to VARBINARY/BLOB.
+`TIMESTAMP_TZ`, ARRAY and spatial `ST_POINT`/`ST_GEOMETRY` are rejected explicitly instead of being silently coerced.
+
+Stage 2 supports `INSERT`, primary-key `UPSERT` through HANA `MERGE INTO`, CREATE TABLE, ADD COLUMN, DROP TABLE and
+TRUNCATE TABLE through the existing JDBC save-mode lifecycle. It intentionally does not create/drop HANA tenant
+databases, perform native bulk load, manage table partitioning, or add CDC/SLT semantics.
 
 ## Options
 

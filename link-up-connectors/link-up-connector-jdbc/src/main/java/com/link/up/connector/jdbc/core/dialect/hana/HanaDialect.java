@@ -12,16 +12,16 @@ import com.link.up.connector.jdbc.core.dialect.JdbcTypeMapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
-/**
- * SAP HANA bounded JDBC Source dialect.
- *
- * <p>Stage 1 intentionally contains no Sink DDL, UPSERT, CDC, SLT or streaming semantics.</p>
- */
+/** SAP HANA bounded JDBC dialect for offline Source and Sink jobs. */
 public final class HanaDialect implements JdbcDialect {
 
     private final JdbcConnectionConfig connectionConfig;
@@ -157,10 +157,73 @@ public final class HanaDialect implements JdbcDialect {
         return quoteIdentifier(tablePath.getTableName());
     }
 
-    /**
-     * Keep custom queries and unqualified source tables aligned with the connector-level schema option.
-     * Explicit URL/properties still override this default in the JDBC driver.
-     */
+    /** HANA offline UPSERT is expressed with MERGE and one positional marker per field. */
+    @Override
+    public Optional<String> buildUpsertSql(
+            TablePath tablePath,
+            List<String> fieldNames,
+            List<String> primaryKeys) {
+
+        JdbcDialect.validateFields(fieldNames);
+        Set<String> primaryKeySet = JdbcDialect.normalizeFields(primaryKeys);
+        if (primaryKeySet.isEmpty()) {
+            throw new IllegalArgumentException("SAP HANA UPSERT 必须配置主键字段");
+        }
+
+        Set<String> fields = new HashSet<String>(fieldNames);
+        for (String primaryKey : primaryKeys) {
+            if (!fields.contains(primaryKey)) {
+                throw new IllegalArgumentException(
+                        "SAP HANA UPSERT 主键字段不存在：" + primaryKey);
+            }
+        }
+
+        String sourceProjection = fieldNames.stream()
+                .map(field -> "? AS " + quoteIdentifier(field))
+                .collect(Collectors.joining(", "));
+        String onClause = primaryKeys.stream()
+                .map(field -> "TARGET." + quoteIdentifier(field)
+                        + " = SOURCE." + quoteIdentifier(field))
+                .collect(Collectors.joining(" AND "));
+
+        List<String> updateFields = fieldNames.stream()
+                .filter(field -> !primaryKeySet.contains(field))
+                .collect(Collectors.toList());
+
+        StringBuilder sql = new StringBuilder()
+                .append("MERGE INTO ")
+                .append(tableIdentifier(tablePath))
+                .append(" AS TARGET USING (SELECT ")
+                .append(sourceProjection)
+                .append(" FROM DUMMY) AS SOURCE ON ")
+                .append(onClause);
+
+        if (!updateFields.isEmpty()) {
+            String updates = updateFields.stream()
+                    .map(field -> "TARGET." + quoteIdentifier(field)
+                            + " = SOURCE." + quoteIdentifier(field))
+                    .collect(Collectors.joining(", "));
+            sql.append(" WHEN MATCHED THEN UPDATE SET ")
+                    .append(updates);
+        }
+
+        String insertFields = fieldNames.stream()
+                .map(this::quoteIdentifier)
+                .collect(Collectors.joining(", "));
+        String insertValues = fieldNames.stream()
+                .map(field -> "SOURCE." + quoteIdentifier(field))
+                .collect(Collectors.joining(", "));
+
+        sql.append(" WHEN NOT MATCHED THEN INSERT (")
+                .append(insertFields)
+                .append(") VALUES (")
+                .append(insertValues)
+                .append(")");
+
+        return Optional.of(sql.toString());
+    }
+
+    /** Keep unqualified queries aligned with the connector-level schema option. */
     @Override
     public Map<String, String> defaultConnectionProperties() {
         if (!JdbcDialect.hasText(connectionConfig.getSchema())

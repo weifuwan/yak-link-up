@@ -61,19 +61,61 @@ public class HanaTypeMapperTest {
     }
 
     @Test
-    public void rejectsSpatialAndArrayTypesInsteadOfSilentlyCoercingThem() {
-        assertUnsupported("ST_GEOMETRY");
-        assertUnsupported("ST_POINT");
-        assertUnsupported("INTEGER ARRAY");
+    public void mapsFluxTypesToSafeHanaSinkTypes() {
+        assertEquals("SMALLINT",
+                mapper.toDatabaseType(
+                        Column.builder("TINY", BasicType.BYTE_TYPE).build()));
+        assertEquals("NVARCHAR(128)",
+                mapper.toDatabaseType(
+                        Column.builder("NAME", BasicType.STRING_TYPE)
+                                .length(128L)
+                                .build()));
+        assertEquals("NCLOB",
+                mapper.toDatabaseType(
+                        Column.builder("BODY", BasicType.STRING_TYPE).build()));
+        assertEquals("VARBINARY(1024)",
+                mapper.toDatabaseType(
+                        Column.builder("PAYLOAD", BasicType.BYTES_TYPE)
+                                .length(1024L)
+                                .build()));
+        assertEquals("BLOB",
+                mapper.toDatabaseType(
+                        Column.builder("PAYLOAD", BasicType.BYTES_TYPE).build()));
+        assertEquals("DECIMAL(20,4)",
+                mapper.toDatabaseType(
+                        Column.builder("AMOUNT", new DecimalType(20, 4))
+                                .precision(20)
+                                .scale(4)
+                                .build()));
+        assertEquals("TIMESTAMP",
+                mapper.toDatabaseType(
+                        Column.builder("CREATED_AT", BasicType.TIMESTAMP_TYPE).build()));
     }
 
     @Test
-    public void stageOneDoesNotExposeSinkTypeConversion() {
+    public void preservesNativeHanaTypeWhenCopyingHanaToHana() {
+        Column tinyint = Column.builder("LEVEL", BasicType.SHORT_TYPE)
+                .sourceType("TINYINT")
+                .build();
+        assertEquals("TINYINT", mapper.toDatabaseType(tinyint, true));
+
+        Column secondDate = Column.builder("CREATED_AT", BasicType.TIMESTAMP_TYPE)
+                .sourceType("SECONDDATE")
+                .build();
+        assertEquals("SECONDDATE", mapper.toDatabaseType(secondDate, true));
+    }
+
+    @Test
+    public void rejectsSpatialArrayAndTimezoneTypesInsteadOfCoercingThem() {
+        assertUnsupported("ST_GEOMETRY");
+        assertUnsupported("ST_POINT");
+        assertUnsupported("INTEGER ARRAY");
+
         try {
             mapper.toDatabaseType(
-                    Column.builder("NAME", BasicType.STRING_TYPE).build());
-            fail("Expected source-only HANA type mapper to reject sink conversion");
-        } catch (UnsupportedOperationException expected) {
+                    Column.builder("TS", BasicType.TIMESTAMP_TZ_TYPE).build());
+            fail("Expected TIMESTAMP_TZ to be rejected for HANA sink");
+        } catch (IllegalArgumentException expected) {
             // expected
         }
     }
