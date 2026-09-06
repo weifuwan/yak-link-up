@@ -81,14 +81,37 @@ public class HanaDialectTest {
     }
 
     @Test
-    public void stageOneCatalogIsReadOnlyAndUpsertIsNotAdvertised() {
+    public void stageTwoCatalogIsWritableAndMergeUsesOneMarkerPerField() {
         HanaDialect dialect = dialect("SALES");
         Catalog catalog = dialect.createCatalog(config("SALES", baseUrl(), null));
-        assertFalse(catalog instanceof WritableCatalog);
-        assertFalse(dialect.buildUpsertSql(
+        assertTrue(catalog instanceof WritableCatalog);
+
+        String sql = dialect.buildUpsertSql(
                 TablePath.of(null, "SALES", "ORDERS"),
-                Arrays.asList("ID", "NAME"),
-                Arrays.asList("ID")).isPresent());
+                Arrays.asList("ID", "NAME", "AMOUNT"),
+                Arrays.asList("ID")).get();
+
+        assertTrue(sql.startsWith(
+                "MERGE INTO \"SALES\".\"ORDERS\" AS TARGET USING (SELECT "));
+        assertTrue(sql.contains(
+                "? AS \"ID\", ? AS \"NAME\", ? AS \"AMOUNT\" FROM DUMMY"));
+        assertTrue(sql.contains(
+                "ON TARGET.\"ID\" = SOURCE.\"ID\""));
+        assertTrue(sql.contains(
+                "WHEN MATCHED THEN UPDATE SET TARGET.\"NAME\" = SOURCE.\"NAME\""));
+        assertTrue(sql.contains(
+                "WHEN NOT MATCHED THEN INSERT (\"ID\", \"NAME\", \"AMOUNT\")"));
+        assertEquals(3, count(sql, '?'));
+    }
+
+    @Test
+    public void allPrimaryKeyMergeSkipsMatchedUpdate() {
+        String sql = dialect("SALES").buildUpsertSql(
+                TablePath.of(null, "SALES", "ORDERS"),
+                Arrays.asList("ID"),
+                Arrays.asList("ID")).get();
+        assertFalse(sql.contains("WHEN MATCHED"));
+        assertTrue(sql.contains("WHEN NOT MATCHED"));
     }
 
     @Test
@@ -100,6 +123,16 @@ public class HanaDialectTest {
                         baseUrl() + "&currentSchema=Sales%20Space",
                         null,
                         null));
+    }
+
+    private static int count(String value, char target) {
+        int result = 0;
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) == target) {
+                result++;
+            }
+        }
+        return result;
     }
 
     private static HanaDialect dialect(String schema) {

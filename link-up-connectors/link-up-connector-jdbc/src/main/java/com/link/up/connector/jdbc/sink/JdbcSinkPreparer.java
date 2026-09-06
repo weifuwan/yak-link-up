@@ -16,9 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Executes JDBC target mapping, validation and DDL once, before any task starts.
- */
+/** Executes JDBC target mapping, validation and DDL once, before any task starts. */
 final class JdbcSinkPreparer implements SinkPreparer {
     private final JdbcSinkConfig config;
     private final JdbcDialect dialect;
@@ -48,8 +46,9 @@ final class JdbcSinkPreparer implements SinkPreparer {
             for (Map.Entry<TablePath, CatalogTable> entry : context.getSourceTables().entrySet()) {
                 CatalogTable target = resolveTargetTable(entry.getValue());
                 List<String> primaryKeys = resolvePrimaryKeys(target);
-                if (config.isUpsert() && !dialect.buildUpsertSql(target.getTablePath(), columnNames(target), primaryKeys).isPresent())
+                if (config.isUpsert() && !dialect.buildUpsertSql(target.getTablePath(), columnNames(target), primaryKeys).isPresent()) {
                     throw new IllegalArgumentException("Dialect does not support UPSERT: " + dialect.name());
+                }
 
                 JdbcSaveModeHandler handler = new JdbcSaveModeHandler(
                         config.getSchemaSaveMode(),
@@ -137,6 +136,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return TiDbSinkSupport.resolveTargetPath(
                     config.getConnectionConfig(), tablePath);
         }
+        if (HanaSinkSupport.accepts(config.getConnectionConfig())) {
+            return HanaSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
         return JdbcCreateTableSqlResolver.resolveTargetPath(
                 config.getConnectionConfig(), tablePath);
     }
@@ -160,6 +163,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
         }
         if (TiDbSinkSupport.accepts(config.getConnectionConfig())) {
             return TiDbSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(), table);
+        }
+        if (HanaSinkSupport.accepts(config.getConnectionConfig())) {
+            return HanaSinkSupport.resolveCreateTableSql(
                     config.getConnectionConfig(), table);
         }
         return JdbcCreateTableSqlResolver.resolve(

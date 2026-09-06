@@ -1,12 +1,15 @@
 package com.link.up.connector.jdbc.catalog.hana;
 
-import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.PrimaryKey;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.catalog.WritableCatalog;
 import com.link.up.api.table.catalog.exception.CatalogException;
+import com.link.up.api.table.catalog.exception.DatabaseAlreadyExistsException;
+import com.link.up.api.table.catalog.exception.DatabaseNotFoundException;
+import com.link.up.api.table.catalog.exception.TableAlreadyExistsException;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.catalog.JdbcCatalogConfig;
 import com.link.up.connector.jdbc.core.dialect.hana.HanaJdbcUrl;
@@ -27,8 +30,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 
-/** Read-only SAP HANA Catalog used by Stage 1 bounded JDBC Source. */
-public final class HanaCatalog implements Catalog {
+/** SAP HANA offline JDBC Catalog for bounded Source and batch Sink jobs. */
+public final class HanaCatalog implements WritableCatalog {
 
     public static final String DIALECT = "hana";
     public static final String TABLE_OPTION_DIALECT = "dialect";
@@ -208,6 +211,122 @@ public final class HanaCatalog implements Catalog {
         }
     }
 
+    /** HANA tenant databases are selected by the JDBC endpoint and are not DDL-managed here. */
+    @Override
+    public void createDatabase(String databaseName, boolean ignoreIfExists)
+            throws CatalogException, DatabaseAlreadyExistsException {
+        throw new UnsupportedOperationException(
+                "SAP HANA JDBC Offline Catalog 不负责 CREATE DATABASE；请预先创建 tenant database/schema");
+    }
+
+    @Override
+    public void dropDatabase(String databaseName, boolean ignoreIfNotExists)
+            throws CatalogException, DatabaseNotFoundException {
+        throw new UnsupportedOperationException(
+                "SAP HANA JDBC Offline Catalog 不负责 DROP DATABASE");
+    }
+
+    @Override
+    public void createTable(CatalogTable table, boolean ignoreIfExists)
+            throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
+        checkOpened();
+        try (Connection connection = connection()) {
+            TablePath path = normalizePath(connection, table.getTablePath());
+            if (tableExists(path)) {
+                if (ignoreIfExists) {
+                    return;
+                }
+                throw new TableAlreadyExistsException(catalogName, path);
+            }
+
+            CatalogTable ddlTable = table.getTablePath().equals(path)
+                    ? table
+                    : table.withPath(path);
+            HanaCreateTableSqlBuilder builder =
+                    new HanaCreateTableSqlBuilder(path, ddlTable, typeMapper);
+            for (String sql : builder.buildStatements()) {
+                execute(connection, sql);
+            }
+        } catch (TableAlreadyExistsException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new CatalogException(
+                    "创建 SAP HANA 表失败，table=" + table.getTablePath(), e);
+        }
+    }
+
+    @Override
+    public void addColumn(TablePath tablePath, Column column)
+            throws CatalogException, TableNotFoundException {
+        checkOpened();
+        try (Connection connection = connection()) {
+            TablePath path = normalizePath(connection, tablePath);
+            if (!tableExists(path)) {
+                throw new TableNotFoundException(catalogName, path);
+            }
+
+            boolean preserveSourceType = "true".equalsIgnoreCase(
+                    column.getAttributes().get(HanaTypeMapper.NATIVE_ATTRIBUTE));
+            String definition = new HanaCreateTableSqlBuilder(
+                    path,
+                    CatalogTable.builder(
+                                    path,
+                                    TableSchema.builder().column(column).build())
+                            .build(),
+                    typeMapper)
+                    .buildColumnDefinition(column, preserveSourceType);
+            execute(connection,
+                    "ALTER TABLE " + HanaCreateTableSqlBuilder.quoteTable(path)
+                            + " ADD (" + definition + ")");
+            if (hasText(column.getComment())) {
+                execute(connection,
+                        "COMMENT ON COLUMN " + HanaCreateTableSqlBuilder.quoteTable(path)
+                                + "." + HanaCreateTableSqlBuilder.quoteIdentifier(column.getName())
+                                + " IS '" + HanaCreateTableSqlBuilder.escapeLiteral(column.getComment()) + "'");
+            }
+        } catch (TableNotFoundException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new CatalogException(
+                    "增加 SAP HANA 字段失败，table=" + tablePath
+                            + "，column=" + column.getName(), e);
+        }
+    }
+
+    @Override
+    public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        tableDdl(tablePath, ignoreIfNotExists, "DROP TABLE ", "删除");
+    }
+
+    @Override
+    public void truncateTable(TablePath tablePath, boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        tableDdl(tablePath, ignoreIfNotExists, "TRUNCATE TABLE ", "清空");
+    }
+
+    private void tableDdl(
+            TablePath tablePath,
+            boolean ignoreIfNotExists,
+            String prefix,
+            String operation) throws CatalogException, TableNotFoundException {
+        checkOpened();
+        try (Connection connection = connection()) {
+            TablePath path = normalizePath(connection, tablePath);
+            if (!tableExists(path)) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new TableNotFoundException(catalogName, path);
+            }
+            execute(connection, prefix + HanaCreateTableSqlBuilder.quoteTable(path));
+        } catch (TableNotFoundException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new CatalogException(operation + " SAP HANA 表失败，table=" + tablePath, e);
+        }
+    }
+
     private List<Column> columns(DatabaseMetaData metadata, TablePath path)
             throws SQLException {
         try (ResultSet rs = metadata.getColumns(
@@ -337,6 +456,12 @@ public final class HanaCatalog implements Catalog {
         } catch (ClassNotFoundException e) {
             throw new CatalogException(
                     "找不到 SAP HANA JDBC Driver：" + config.getDriverClass(), e);
+        }
+    }
+
+    private static void execute(Connection connection, String sql) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.execute();
         }
     }
 

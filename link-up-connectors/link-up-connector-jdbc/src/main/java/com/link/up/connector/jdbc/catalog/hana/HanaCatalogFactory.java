@@ -12,7 +12,7 @@ import com.link.up.connector.jdbc.core.dialect.hana.HanaJdbcUrl;
 import java.util.Collections;
 import java.util.Map;
 
-/** Read-only SAP HANA Catalog factory for Stage 1. */
+/** SAP HANA Catalog factory for bounded Source and offline Sink jobs. */
 @AutoService(Factory.class)
 public final class HanaCatalogFactory implements CatalogFactory {
 

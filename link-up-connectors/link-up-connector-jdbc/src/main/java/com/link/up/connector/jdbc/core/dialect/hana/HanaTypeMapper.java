@@ -13,14 +13,16 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Locale;
 
-/** SAP HANA JDBC type mapper for bounded/offline source jobs. */
+/** SAP HANA JDBC type mapper for bounded/offline source and sink jobs. */
 public final class HanaTypeMapper implements JdbcTypeMapper {
 
     static final int MAX_DECIMAL_PRECISION = 38;
     static final int DEFAULT_DECIMAL_PRECISION = 38;
     static final int DEFAULT_DECIMAL_SCALE = 0;
     static final int MAX_TIMESTAMP_PRECISION = 7;
-    static final String NATIVE_ATTRIBUTE = "hana_native";
+    static final long MAX_NVARCHAR_LENGTH = 5000L;
+    static final long MAX_VARBINARY_LENGTH = 5000L;
+    public static final String NATIVE_ATTRIBUTE = "hana_native";
 
     @Override
     public Column map(ResultSetMetaData metadata, int columnIndex) throws SQLException {
@@ -68,11 +70,62 @@ public final class HanaTypeMapper implements JdbcTypeMapper {
         return builder.build();
     }
 
-    /** Stage 1 is deliberately source-only. */
     @Override
     public String toDatabaseType(Column column) {
-        throw new UnsupportedOperationException(
-                "SAP HANA Stage 1 only supports bounded JDBC Source; Sink type conversion is not enabled");
+        return toDatabaseType(column, false);
+    }
+
+    /**
+     * Converts Flux types to HANA target types.
+     *
+     * <p>When the source is also HANA, callers may preserve the original native
+     * type to keep TINYINT/SMALLDECIMAL/SECONDDATE and exact LOB choices.</p>
+     */
+    public String toDatabaseType(Column column, boolean preserveSourceType) {
+        if (column == null) {
+            throw new IllegalArgumentException("column must not be null");
+        }
+        if (preserveSourceType && canPreserve(column.getSourceType())) {
+            return column.getSourceType().trim();
+        }
+
+        SqlType type = column.getDataType().getSqlType();
+        switch (type) {
+            case BOOLEAN:
+                return "BOOLEAN";
+            case TINYINT:
+            case SMALLINT:
+                // Flux TINYINT is signed; HANA TINYINT is unsigned.
+                return "SMALLINT";
+            case INT:
+                return "INTEGER";
+            case BIGINT:
+                return "BIGINT";
+            case FLOAT:
+                return "REAL";
+            case DOUBLE:
+                return "DOUBLE";
+            case DECIMAL:
+                return decimalType(column);
+            case STRING:
+                return stringType(column);
+            case BYTES:
+                return binaryType(column);
+            case DATE:
+                return "DATE";
+            case TIME:
+                return "TIME";
+            case TIMESTAMP:
+                return "TIMESTAMP";
+            case TIMESTAMP_TZ:
+                throw new IllegalArgumentException(
+                        "SAP HANA TIMESTAMP 不保存时区偏移，不能直接写入 TIMESTAMP_TZ，column="
+                                + column.getName());
+            default:
+                throw new IllegalArgumentException(
+                        "SAP HANA 不支持 Flux 类型：" + type
+                                + "，column=" + column.getName());
+        }
     }
 
     /** Package-visible for focused type contract tests. */
@@ -196,6 +249,97 @@ public final class HanaTypeMapper implements JdbcTypeMapper {
                             + safePrecision + "，scale=" + safeScale);
         }
         return new DecimalType(safePrecision, safeScale);
+    }
+
+    private static String decimalType(Column column) {
+        Integer precisionValue = column.getPrecision();
+        Integer scaleValue = column.getScale();
+
+        if (column.getDataType() instanceof DecimalType) {
+            DecimalType decimal = (DecimalType) column.getDataType();
+            if (precisionValue == null) {
+                precisionValue = decimal.getPrecision();
+            }
+            if (scaleValue == null) {
+                scaleValue = decimal.getScale();
+            }
+        }
+
+        int precision = precisionValue == null
+                ? DEFAULT_DECIMAL_PRECISION
+                : precisionValue;
+        int scale = scaleValue == null
+                ? DEFAULT_DECIMAL_SCALE
+                : scaleValue;
+
+        if (precision <= 0) {
+            precision = DEFAULT_DECIMAL_PRECISION;
+        }
+        if (precision > MAX_DECIMAL_PRECISION) {
+            throw new IllegalArgumentException(
+                    "SAP HANA DECIMAL precision 最大为 38，column="
+                            + column.getName() + "，precision=" + precision);
+        }
+        if (scale < 0 || scale > precision) {
+            throw new IllegalArgumentException(
+                    "SAP HANA DECIMAL scale 非法，column=" + column.getName()
+                            + "，precision=" + precision + "，scale=" + scale);
+        }
+        return "DECIMAL(" + precision + "," + scale + ")";
+    }
+
+    private static String stringType(Column column) {
+        Long length = column.getLength();
+        if (length == null || length <= 0 || length > MAX_NVARCHAR_LENGTH) {
+            return "NCLOB";
+        }
+        return "NVARCHAR(" + Math.max(1L, length) + ")";
+    }
+
+    private static String binaryType(Column column) {
+        Long length = column.getLength();
+        if (length == null || length <= 0 || length > MAX_VARBINARY_LENGTH) {
+            return "BLOB";
+        }
+        return "VARBINARY(" + Math.max(1L, length) + ")";
+    }
+
+    private static boolean canPreserve(String sourceType) {
+        String normalized = normalizeType(sourceType);
+        if (normalized.isEmpty() || normalized.endsWith(" ARRAY")) {
+            return false;
+        }
+        switch (baseType(normalized)) {
+            case "BOOLEAN":
+            case "TINYINT":
+            case "SMALLINT":
+            case "INTEGER":
+            case "INT":
+            case "BIGINT":
+            case "REAL":
+            case "DOUBLE":
+            case "DOUBLE PRECISION":
+            case "SMALLDECIMAL":
+            case "DECIMAL":
+            case "DATE":
+            case "TIME":
+            case "SECONDDATE":
+            case "TIMESTAMP":
+            case "BINARY":
+            case "VARBINARY":
+            case "BLOB":
+            case "VARCHAR":
+            case "NVARCHAR":
+            case "ALPHANUM":
+            case "SHORTTEXT":
+            case "CLOB":
+            case "NCLOB":
+            case "TEXT":
+            case "BINTEXT":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static void applyProperties(
