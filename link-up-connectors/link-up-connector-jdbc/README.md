@@ -99,20 +99,71 @@ GBase is modeled as a database family, not as one generic JDBC dialect. The stab
 `gbase8a` and `gbase8s`. A generic `gbase` dialect is intentionally not defined because the three products use different
 JDBC protocols and database semantics.
 
-The family scaffold only provides stable product metadata and family-level helpers. It deliberately does **not** register
-`JdbcDialectFactory` implementations yet, so these identifiers do not advertise runtime support before their concrete
-URL, driver, catalog, type-mapping and SQL behavior is implemented and tested.
+The shared `gbase/common` layer only carries stable product metadata and family-level helpers. GBase 8c now has bounded
+Source and existing-table Sink support; the `gbase8a` and `gbase8s` identities remain reserved without a
+`JdbcDialectFactory` until their concrete URL, driver, catalog, type-mapping and SQL behavior is implemented and tested.
 
 Shared GBase code must remain product-neutral. Driver names, JDBC URL parsing, identifier rules, catalog behavior, type
 mapping, row conversion, INSERT/UPSERT SQL and distribution/MPP behavior belong to the concrete product adapter unless at
 least two completed adapters prove the behavior is genuinely common. The planned bounded/offline implementation order is:
 
-1. GBase 8c Source, then existing-table Sink.
+1. GBase 8c bounded Source and existing-table Sink.
 2. GBase 8a Source, then existing-table JDBC Sink; native/high-speed MPP loading is a later stage.
 3. GBase 8s Source, then existing-table Sink.
 
-CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths are outside
-this scaffold.
+CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths stay outside
+the family scaffold.
+
+### GBase 8c bounded Source and existing-table Sink
+
+GBase 8c is exposed as the dedicated `gbase8c` JDBC dialect. The canonical bounded path uses the GBase 8c JDBC protocol
+and driver instead of pretending that a PostgreSQL or MySQL URL uniquely identifies the product:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:gbase8c://gbase8c:5432/app"
+  driver = "com.gbase8c.Driver"
+  dialect = "gbase8c"
+  schema = "public"
+  table_path = "public.orders"
+}
+
+sink {
+  type = "jdbc"
+  url = "jdbc:gbase8c://gbase8c:5432/archive"
+  driver = "com.gbase8c.Driver"
+  dialect = "gbase8c"
+  schema = "public"
+  table = "public.orders"
+}
+```
+
+The bounded Source reuses the proven PostgreSQL-compatible **read-side type contract** while keeping its own URL parser,
+dialect, row converter and Catalog. Metadata discovery uses `information_schema` semantics for schemas, tables, columns
+and primary keys. The JDBC URL owns the active database; `schema.table` is the normal table path, and an explicit
+`database.schema.table` is accepted only when the database matches the one in the JDBC URL. This prevents metadata from
+one database being paired with data read through another connection URL.
+
+The existing-table Sink reuses the shared transactional JDBC writer: standard parameterized `INSERT`, configured batch
+size, `PreparedStatement.addBatch()/executeBatch()`, task-local commit/rollback, retry/savepoint handling and dirty-data
+behavior all remain in the common JDBC path. No GBase-specific writer is introduced. The target database always comes
+from the Sink JDBC URL. An explicit `schema.table` target mapping is preserved; otherwise target connection settings are
+preferred so a source database/schema cannot silently leak into a different GBase 8c target.
+
+GBase 8c target tables must already exist. The Catalog implements `WritableCatalog` only so the common Sink save-mode
+lifecycle can validate existing tables and support `DROP_DATA` through `TRUNCATE TABLE`. Automatic database/table
+creation, table recreation, `ADD COLUMN`, `DROP TABLE` and target DDL type generation are blocked explicitly.
+`CREATE_SCHEMA_WHEN_NOT_EXIST` therefore works when the target already exists and fails clearly when it does not;
+`RECREATE_SCHEMA` is rejected before a destructive drop can occur.
+
+The current GBase 8c Sink intentionally does not advertise UPSERT. `write_mode = UPSERT` fails during Sink preparation
+instead of guessing PostgreSQL/MySQL/compatibility-mode conflict semantics. CDC, streaming checkpoints, coordinated
+database snapshots, automatic distributed-table design, Oracle/MySQL/Teradata compatibility-mode expansion and native
+bulk-loading paths remain separate stages.
+
+The dedicated GBase 8c JDBC driver is not guessed as a Maven dependency by this module. Deployments must place the vendor
+JDBC driver on the runtime classpath and configure `driver = "com.gbase8c.Driver"` explicitly.
 
 ## SAP HANA
 
