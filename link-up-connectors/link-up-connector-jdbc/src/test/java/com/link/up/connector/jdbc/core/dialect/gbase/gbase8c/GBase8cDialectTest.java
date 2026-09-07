@@ -73,7 +73,7 @@ public class GBase8cDialectTest {
         IllegalArgumentException error = assertThrows(
                 IllegalArgumentException.class,
                 () -> dialect.parseTablePath("archive.sales.orders"));
-        assertTrue(error.getMessage().contains("不支持跨 database"));
+        assertTrue(error.getMessage().contains("cross-database"));
 
         assertThrows(
                 IllegalArgumentException.class,
@@ -94,10 +94,15 @@ public class GBase8cDialectTest {
     }
 
     @Test
-    public void stageOneCatalogIsReadOnlyAndUpsertIsNotAdvertised() {
+    public void existingTableSinkUsesPortableInsertAndStillRejectsUpsert() {
         GBase8cDialect dialect = dialect("public");
         Catalog catalog = dialect.createCatalog(config("public", baseUrl(), null, null));
-        assertFalse(catalog instanceof WritableCatalog);
+        assertTrue(catalog instanceof WritableCatalog);
+        assertEquals(
+                "INSERT INTO \"public\".\"orders\" (\"id\", \"name\") VALUES (?, ?)",
+                dialect.buildInsertSql(
+                        TablePath.of("app", "public", "orders"),
+                        Arrays.asList("id", "name")));
         assertFalse(dialect.buildUpsertSql(
                 TablePath.of(null, "public", "orders"),
                 Arrays.asList("id", "name"),
@@ -105,7 +110,7 @@ public class GBase8cDialectTest {
     }
 
     @Test
-    public void stageOneTypeMapperDoesNotGenerateSinkTypes() {
+    public void existingTableSinkDoesNotGenerateDdlTypes() {
         Column column = Column.builder("name", BasicType.STRING_TYPE).build();
         assertThrows(
                 UnsupportedOperationException.class,
@@ -113,7 +118,7 @@ public class GBase8cDialectTest {
     }
 
     @Test
-    public void stageOneAdvertisesBestEffortReadConsistencyOnly() {
+    public void boundedSourceStillAdvertisesBestEffortReadConsistencyOnly() {
         assertEquals(
                 Collections.singleton(ReadConsistency.BEST_EFFORT),
                 dialect("public").supportedReadConsistencies());

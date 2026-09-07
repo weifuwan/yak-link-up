@@ -11,10 +11,11 @@ import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
 import com.link.up.connector.jdbc.core.dialect.JdbcTypeMapper;
 
 /**
- * GBase 8c bounded/offline JDBC Source dialect.
+ * GBase 8c bounded/offline JDBC dialect.
  *
- * <p>Stage 1 targets the dedicated GBase 8c JDBC protocol and PG-compatible metadata/read
- * semantics. Sink DDL, INSERT/UPSERT, CDC and compatibility-mode expansion are separate stages.</p>
+ * <p>The adapter targets the dedicated GBase 8c JDBC protocol and PG-compatible metadata/read
+ * semantics. The existing-table Sink stage reuses the portable INSERT/batch path only; UPSERT,
+ * structure-changing DDL, CDC and compatibility-mode expansion remain separate stages.</p>
  */
 public final class GBase8cDialect implements JdbcDialect {
 
@@ -72,7 +73,7 @@ public final class GBase8cDialect implements JdbcDialect {
         return new GBase8cJdbcRowConverter();
     }
 
-    /** GBase 8c Stage 1 follows PG-compatible schema.table path semantics. */
+    /** GBase 8c follows PG-compatible schema.table path semantics. */
     @Override
     public TablePath parseTablePath(String tablePath) {
         if (!JdbcDialect.hasText(tablePath)) {
@@ -127,9 +128,10 @@ public final class GBase8cDialect implements JdbcDialect {
         if (!JdbcDialect.hasText(requestedDatabase)
                 || !databaseName.equals(requestedDatabase.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8c Stage 1 不支持跨 database table_path；当前 JDBC 数据库="
+                    "GBase 8c bounded JDBC adapter does not support cross-database table_path; "
+                            + "current database="
                             + databaseName
-                            + "，请求数据库="
+                            + ", requested database="
                             + requestedDatabase);
         }
     }

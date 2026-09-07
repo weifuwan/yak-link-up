@@ -9,10 +9,11 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
 /**
- * GBase 8c Stage 1 type mapper.
+ * GBase 8c type mapper for bounded Source and existing-table Sink jobs.
  *
- * <p>The bounded Source targets PG-compatible databases and reuses the mature PostgreSQL read-side
- * type contract. Sink DDL mapping stays disabled until the dedicated GBase 8c Sink stage.</p>
+ * <p>The adapter reuses the mature PostgreSQL-compatible read-side type contract. The current Sink
+ * writes only to pre-created tables, so target DDL type generation stays disabled until a later
+ * GBase 8c table-creation stage models distribution and compatibility-mode semantics.</p>
  */
 public final class GBase8cTypeMapper implements JdbcTypeMapper {
 
@@ -31,6 +32,6 @@ public final class GBase8cTypeMapper implements JdbcTypeMapper {
     @Override
     public String toDatabaseType(Column column) {
         throw new UnsupportedOperationException(
-                "GBase 8c Stage 1 is source-only; target type generation belongs to the Sink stage");
+                "GBase 8c existing-table Sink does not generate target DDL types");
     }
 }
