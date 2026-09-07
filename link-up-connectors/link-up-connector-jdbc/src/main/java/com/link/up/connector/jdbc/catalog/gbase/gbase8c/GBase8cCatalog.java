@@ -1,12 +1,15 @@
 package com.link.up.connector.jdbc.catalog.gbase.gbase8c;
 
-import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.PrimaryKey;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.catalog.WritableCatalog;
 import com.link.up.api.table.catalog.exception.CatalogException;
+import com.link.up.api.table.catalog.exception.DatabaseAlreadyExistsException;
+import com.link.up.api.table.catalog.exception.DatabaseNotFoundException;
+import com.link.up.api.table.catalog.exception.TableAlreadyExistsException;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.catalog.JdbcCatalogConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
@@ -18,20 +21,21 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Read-only GBase 8c Catalog for the bounded Source stage.
+ * GBase 8c Catalog for bounded Source and existing-table Sink jobs.
  *
  * <p>Metadata follows the PG-compatible information_schema contract, while the JDBC connection
- * remains the dedicated GBase 8c protocol. One Source connection owns exactly one database; other
- * databases are intentionally not exposed as selectable targets. This class does not implement
- * WritableCatalog so the generic JDBC Sink rejects it during preparation.</p>
+ * remains bound to one GBase 8c database. Sink preparation may validate and truncate an existing
+ * target table, but all structure-changing DDL stays blocked until GBase 8c distribution and
+ * compatibility-mode semantics are modeled explicitly.</p>
  */
-public final class GBase8cCatalog implements Catalog {
+public final class GBase8cCatalog implements WritableCatalog {
 
     public static final String TABLE_OPTION_DIALECT = "dialect";
 
@@ -233,6 +237,72 @@ public final class GBase8cCatalog implements Catalog {
         }
     }
 
+    @Override
+    public void createDatabase(
+            String databaseName,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseAlreadyExistsException {
+        throw unsupportedSchemaDdl("create database");
+    }
+
+    @Override
+    public void dropDatabase(
+            String databaseName,
+            boolean ignoreIfNotExists)
+            throws CatalogException, DatabaseNotFoundException {
+        throw unsupportedSchemaDdl("drop database");
+    }
+
+    @Override
+    public void createTable(
+            CatalogTable table,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
+        throw unsupportedSchemaDdl("create table");
+    }
+
+    @Override
+    public void addColumn(
+            TablePath tablePath,
+            Column column)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("add column");
+    }
+
+    @Override
+    public void dropTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("drop table");
+    }
+
+    @Override
+    public void truncateTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        checkOpened();
+        TablePath normalized = normalizeTablePath(tablePath);
+        if (!tableExists(normalized)) {
+            if (ignoreIfNotExists) {
+                return;
+            }
+            throw new TableNotFoundException(catalogName, normalized);
+        }
+
+        String sql = "TRUNCATE TABLE "
+                + quoteIdentifier(normalized.getSchemaName())
+                + "."
+                + quoteIdentifier(normalized.getTableName());
+        try (Connection connection = newConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+        } catch (SQLException e) {
+            throw new CatalogException("清空 GBase 8c 表失败，table=" + normalized, e);
+        }
+    }
+
     private List<Column> readColumns(Connection connection, TablePath tablePath)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_COLUMNS_SQL)) {
@@ -284,9 +354,9 @@ public final class GBase8cCatalog implements Catalog {
     private void requireCurrentDatabase(String databaseName) {
         if (hasText(databaseName) && !defaultDatabase.equals(databaseName.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8c Stage 1 连接固定到 database="
+                    "GBase 8c bounded JDBC adapter is fixed to database="
                             + defaultDatabase
-                            + "，不支持请求 database="
+                            + " and does not support database="
                             + databaseName);
         }
     }
@@ -314,6 +384,20 @@ public final class GBase8cCatalog implements Catalog {
         if (!opened) {
             throw new IllegalStateException("Catalog 尚未打开，请先调用 open()");
         }
+    }
+
+    private static String quoteIdentifier(String identifier) {
+        if (!hasText(identifier)) {
+            throw new IllegalArgumentException("identifier must not be empty");
+        }
+        return "\"" + identifier.trim().replace("\"", "\"\"") + "\"";
+    }
+
+    private static CatalogException unsupportedSchemaDdl(String operation) {
+        return new CatalogException(
+                "GBase 8c existing-table Sink supports target-table DML only; "
+                        + operation
+                        + " is disabled until distribution and compatibility-mode DDL is modeled");
     }
 
     private static boolean hasText(String value) {
