@@ -1,5 +1,7 @@
 package com.link.up.connector.elasticsearch8.schema;
 
+import co.elastic.clients.elasticsearch._types.mapping.TypeMapping;
+import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.up.api.table.catalog.Column;
@@ -7,9 +9,10 @@ import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.BasicType;
 import com.link.up.api.table.type.DecimalType;
 import com.link.up.api.table.type.FluxDataType;
-import co.elastic.clients.elasticsearch._types.mapping.TypeMapping;
+import jakarta.json.stream.JsonGenerator;
 
 import java.io.IOException;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -30,15 +33,25 @@ public final class Elasticsearch8TypeMapper {
         if (mapping == null) {
             throw new IllegalArgumentException("Elasticsearch index mapping must not be null");
         }
-        final Map<String, Object> raw;
+        return toTableSchema(toRawMapping(mapping), projectedFields);
+    }
+
+    private static Map<String, Object> toRawMapping(TypeMapping mapping) {
         try {
-            raw = OBJECT_MAPPER.readValue(
-                    mapping.toString(),
+            JacksonJsonpMapper jsonpMapper = new JacksonJsonpMapper(OBJECT_MAPPER);
+            StringWriter json = new StringWriter();
+            JsonGenerator generator = jsonpMapper.jsonProvider().createGenerator(json);
+            try {
+                mapping.serialize(generator, jsonpMapper);
+            } finally {
+                generator.close();
+            }
+            return OBJECT_MAPPER.readValue(
+                    json.toString(),
                     new TypeReference<Map<String, Object>>() { });
-        } catch (IOException failure) {
+        } catch (IOException | RuntimeException failure) {
             throw new IllegalArgumentException("Failed to read Elasticsearch 8 mapping JSON", failure);
         }
-        return toTableSchema(raw, projectedFields);
     }
 
     static TableSchema toTableSchema(

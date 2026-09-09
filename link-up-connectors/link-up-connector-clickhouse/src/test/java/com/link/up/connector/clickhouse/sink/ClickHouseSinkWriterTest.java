@@ -15,6 +15,7 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
@@ -31,7 +32,7 @@ public class ClickHouseSinkWriterTest {
 
         writer.open();
         writer.write(
-                RecordBatch.data(
+                batch(
                         Arrays.asList(
                                 FluxRow.of(1L, "a"),
                                 FluxRow.of(2L, "b"),
@@ -59,7 +60,7 @@ public class ClickHouseSinkWriterTest {
 
         writer.open();
         writer.write(
-                RecordBatch.data(Collections.singletonList(FluxRow.of(1L, "a"))),
+                batch(Collections.singletonList(FluxRow.of(1L, "a"))),
                 source);
         assertEquals(1, executor.pendingRows);
         assertEquals(0, executor.flushCount);
@@ -89,14 +90,18 @@ public class ClickHouseSinkWriterTest {
         writer.open();
         try {
             writer.write(
-                    RecordBatch.data(Collections.singletonList(FluxRow.of(1L, "a"))),
+                    batch(Collections.singletonList(FluxRow.of(1L, "a"))),
                     source);
             writer.write(
-                    RecordBatch.data(Collections.singletonList(FluxRow.of(2L, "b", "x"))),
+                    batch(Collections.singletonList(FluxRow.of(2L, "b", "x"))),
                     sourceTable(changed));
         } finally {
             writer.close();
         }
+    }
+
+    private static RecordBatch<FluxRow> batch(List<FluxRow> rows) {
+        return RecordBatch.of("source.orders", "split-0", rows);
     }
 
     private static ClickHouseSinkWriter writer(
