@@ -26,6 +26,10 @@
         <module>link-up-connector-mongodb</module>
         <module>link-up-connector-datagen</module>
         <module>link-up-connector-print</module>
+        <module>link-up-connector-file-base</module>
+        <module>link-up-connector-file-local</module>
+        <module>link-up-connector-file-s3</module>
+        <module>link-up-connector-file-sftp</module>
     </modules>
 
 </project>

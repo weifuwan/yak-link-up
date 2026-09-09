@@ -57,6 +57,17 @@ elasticsearch8       -> elasticsearch-common + ES8 SDK
 - 如果多个叶子模块依赖同一个 Maven GAV 的不兼容版本，在 classloader / relocation 等隔离机制完成前，禁止同时平铺进 `launcher` / `server` runtime classpath。
 - “拆 Maven module”不是 runtime dependency isolation；是否能进入发行包必须单独验证。
 
+## 存储家族 Connector
+
+同一数据源存在多种传输方式（如文件的本地/S3/SFTP）时，允许拆成一个引擎 base 模块加多个存储叶模块：
+
+```text
+file-base → api（引擎：格式解析/拆分/Reader 链路 + FileStorage 接口，无厂商 SDK）
+file-local/s3/sftp → file-base（各持存储实现、专属配置与 identifier）
+```
+
+边界规则：厂商 SDK 只能出现在对应叶模块；叶之间不得互相依赖；每个叶必须有独立 identifier；base 通过工厂注入获得存储实例，不得依赖任何叶。
+
 ## 第三方依赖原则
 
 - 能用 JDK 解决的简单问题，不额外引库。

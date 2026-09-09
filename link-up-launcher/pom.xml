@@ -65,6 +65,21 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.link.up</groupId>
+            <artifactId>link-up-connector-file-local</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.link.up</groupId>
+            <artifactId>link-up-connector-file-s3</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.link.up</groupId>
+            <artifactId>link-up-connector-file-sftp</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-api</artifactId>
             <version>${log4j2.version}</version>

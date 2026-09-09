@@ -99,3 +99,13 @@ Print Sink：
 - 每行数据以固定格式写入 INFO 日志（任务日志文件可查），schema 行每数据集只打一次；`PrintRowFormatter` 是纯函数，可直接对输出字符串做单元断言。
 - Preparer 显式留空（无目标端 DDL、无连接校验），commit/abort 为默认 no-op，`CommitScope.TASK_LOCAL`；它是无事务 Sink 的参考实现。
 - 行号按 Writer 从 1 计数，跨 Writer 不构成全序，断言用行集合比较。
+
+## File Source
+
+文件族连接器（`link-up-connector-file-base` 引擎 + `localfile`/`s3file`/`sftpfile` 三个叶 identifier）从本地文件系统、S3 与 SFTP 读取有界文本数据，设计规范见 `FILE_SOURCE_DESIGN.md`。
+
+- 存储接入收敛在 base 的 `FileStorage` 接口（list / openRange / exists / wholeFileOnly），叶模块经 `FileStorageFactory` 注入各自的实现（`LocalFileStorage`、AWS SDK v2 的 `S3FileStorage`、JSch 的 `SftpFileStorage`），厂商 SDK 只存在于对应叶模块。格式解析、行对齐拆分、表头发现在 base 中一次实现，三个存储全部复用。
+- 格式 Stage 1 支持 csv/tsv/text/jsonl；csv 用 commons-csv 严格解析（引号、转义、内嵌换行），jsonl 需显式 schema，text 输出单列。
+- 拆分按字节范围 + 行对齐回扫：cut 处引号深度取窗口内引号总数奇偶，候选换行符与 cut 之间引号数保持该深度才是真实行边界；窗口超限 fail-fast。gz 文件按文件判定并整文件单 split。
+- Schema 优先级：显式声明 > csv/tsv 表头发现（全 STRING）> text 单列；jsonl 推断留待后续 Stage。
+- Capability 声明 `TABLE_SCHEMA_DISCOVERY` 与 `PARTITION_SPLIT`；S3 表头发现需要网络访问，只在 explain 路径生效，由引擎的 validate/explain 契约保证。

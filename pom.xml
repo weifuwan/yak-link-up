@@ -42,6 +42,11 @@
         <elasticsearch8.client.version>8.19.21</elasticsearch8.client.version>
         <elasticsearch8.jackson2.version>2.18.8</elasticsearch8.jackson2.version>
         <mongodb.driver.version>4.11.5</mongodb.driver.version>
+        <aws-sdk.version>2.25.60</aws-sdk.version>
+        <jsch.version>0.2.16</jsch.version>
+        <sshd.version>2.12.1</sshd.version>
+        <commons-csv.version>1.10.0</commons-csv.version>
+        <mockito.version>4.11.0</mockito.version>
 
 
     </properties>
