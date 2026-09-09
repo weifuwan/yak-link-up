@@ -15,7 +15,8 @@ public class Elasticsearch7SinkConfigTest {
 
     @Test
     public void parsesBoundedSinkDefaults() {
-        Elasticsearch7SinkConfig config = Elasticsearch7SinkConfig.of(config("orders"));
+        Elasticsearch7SinkConfig config =
+                Elasticsearch7SinkConfig.of(ReadonlyConfig.fromMap(config("orders")));
         assertEquals(1000, config.getBatchSize());
         assertEquals(3, config.getMaxRetries());
         assertEquals(200L, config.getRetryBackoffMs());
