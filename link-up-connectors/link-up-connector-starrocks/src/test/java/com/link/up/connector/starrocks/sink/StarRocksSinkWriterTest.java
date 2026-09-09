@@ -38,7 +38,7 @@ public class StarRocksSinkWriterTest {
 
         writer.open();
         writer.write(
-                RecordBatch.data(
+                batch(
                         Arrays.asList(
                                 FluxRow.of(1L, "a"),
                                 FluxRow.of(2L, "b"),
@@ -66,7 +66,7 @@ public class StarRocksSinkWriterTest {
 
         writer.open();
         writer.write(
-                RecordBatch.data(Collections.singletonList(FluxRow.of(1L, "a"))),
+                batch(Collections.singletonList(FluxRow.of(1L, "a"))),
                 sourceTable(schema()));
         assertEquals(0, executor.payloads.size());
 
@@ -92,10 +92,10 @@ public class StarRocksSinkWriterTest {
         writer.open();
         try {
             writer.write(
-                    RecordBatch.data(Collections.singletonList(FluxRow.of(1L, "a"))),
+                    batch(Collections.singletonList(FluxRow.of(1L, "a"))),
                     sourceTable(first));
             writer.write(
-                    RecordBatch.data(Collections.singletonList(FluxRow.of(2L, "b", "x"))),
+                    batch(Collections.singletonList(FluxRow.of(2L, "b", "x"))),
                     sourceTable(second));
         } finally {
             writer.close();
@@ -122,7 +122,7 @@ public class StarRocksSinkWriterTest {
 
         writer.open();
         writer.write(
-                RecordBatch.data(
+                batch(
                         Arrays.asList(
                                 FluxRow.of(1L, "a"),
                                 FluxRow.of(2L, "b"))),
@@ -135,6 +135,10 @@ public class StarRocksSinkWriterTest {
         assertEquals(1, summary.getSampleCount());
 
         writer.close();
+    }
+
+    private static RecordBatch<FluxRow> batch(List<FluxRow> rows) {
+        return RecordBatch.of("source.orders", "split-0", rows);
     }
 
     private static StarRocksSinkWriter writer(
