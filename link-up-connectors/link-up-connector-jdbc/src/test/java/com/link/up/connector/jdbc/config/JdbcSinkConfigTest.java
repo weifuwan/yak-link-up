@@ -11,6 +11,8 @@ import static org.junit.Assert.*;
 
 public class JdbcSinkConfigTest {
 
+    private static final String MYSQL_DRIVER = "com.mysql.cj.jdbc.Driver";
+
     @Test
     public void shouldResolveTargetTableTemplateForMySqlPath() {
         JdbcSinkConfig config = config("table = \"sink_${schema_name}_${table_name}\"");
@@ -43,6 +45,7 @@ public class JdbcSinkConfigTest {
                 ReadonlyConfig.fromConfig(
                         ConfigFactory.parseString(
                                 "url = \"jdbc:mysql://localhost:3306/test1\"\n"
+                                        + "driver = \"" + MYSQL_DRIVER + "\"\n"
                                         + "table = \"test1.sink_${table_name}\"")
                                 .resolve(
                                         ConfigResolveOptions.defaults()
@@ -79,6 +82,8 @@ public class JdbcSinkConfigTest {
         return JdbcSinkConfig.of(
                 ReadonlyConfig.fromConfig(
                         ConfigFactory.parseString(
-                                "url = \"jdbc:mysql://localhost:3306/flux_test\"\n" + sinkOptions)));
+                                "url = \"jdbc:mysql://localhost:3306/flux_test\"\n"
+                                        + "driver = \"" + MYSQL_DRIVER + "\"\n"
+                                        + sinkOptions)));
     }
 }
